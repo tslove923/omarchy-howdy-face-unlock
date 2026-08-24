@@ -1,0 +1,158 @@
+#!/bin/bash
+
+# omarchy plugin add only clones files, so this is the rest of the install.
+# Run it yourself after cloning: ~/.config/omarchy/plugins/<id>/setup
+
+set -e
+
+root=$(cd "$(dirname "$0")" && pwd)
+
+CONFIG_DIR="/etc/howdy"
+MODELS_DIR="$CONFIG_DIR/models"
+CONFIG_FILE="$CONFIG_DIR/config.ini"
+PAM_HOWDY="/etc/pam.d/omarchy-lock-howdy"
+LOCK_QML="/usr/share/omarchy/shell/plugins/lock/Service.qml"
+LOCK_QML_ORIG="$LOCK_QML.orig"
+
+# Sets/inserts key = value inside [section] of an ini file without disturbing
+# anything else in it -- howdy's config.ini is heavily commented, and a
+# configparser-style rewrite would throw all of that away.
+set_ini() {
+  local file=$1 section=$2 key=$3 value=$4
+  awk -v section="[$section]" -v key="$key" -v value="$value" '
+    BEGIN { in_section = 0; done = 0 }
+    $0 == section { in_section = 1; print; next }
+    in_section && /^\[/ {
+      if (!done) { print key " = " value; done = 1 }
+      in_section = 0
+      print
+      next
+    }
+    in_section && $0 ~ "^" key "[[:space:]]*=" {
+      print key " = " value
+      done = 1
+      next
+    }
+    { print }
+    END { if (in_section && !done) print key " = " value }
+  ' "$file" | sudo tee "$file.tmp" >/dev/null && sudo mv "$file.tmp" "$file"
+}
+
+echo -e "\e[32mSetting up face unlock (Howdy) for the lock screen.\n\e[0m"
+
+# Bail before installing anything if there's no IR camera to use. A color-only
+# webcam can technically run Howdy too, but it's far less reliable across
+# lighting and isn't what this flow is tuned for.
+ir_device=$("$root/bin/omarchy-hw-ir-camera") || {
+  echo -e "\e[31mNo infrared camera detected.\e[0m"
+  exit 1
+}
+echo "Found infrared camera at $ir_device."
+
+source omarchy-sudo-keepalive
+
+echo -e "\nInstalling required packages...\n"
+omarchy-pkg-add v4l-utils
+
+# python-dlib's AUR PKGBUILD defaults to building its CUDA subpackage, which
+# fails to build without an actual Nvidia GPU/toolkit present. Only attempt
+# it when there's real Nvidia hardware to justify it.
+if omarchy-pkg-missing python-dlib; then
+  if lspci -nn 2>/dev/null | grep -qi nvidia; then
+    echo "Nvidia GPU detected -- building python-dlib with CUDA support..."
+    yay -S --noconfirm --needed python-dlib
+  else
+    echo "No Nvidia GPU detected -- building python-dlib CPU-only..."
+    build_dir=$(mktemp -d)
+    git clone --depth 1 https://aur.archlinux.org/python-dlib.git "$build_dir"
+    sed -i 's/^_build_cuda=.*/_build_cuda=0/' "$build_dir/PKGBUILD"
+    (cd "$build_dir" && makepkg -si --noconfirm)
+    rm -rf "$build_dir"
+  fi
+fi
+
+omarchy-pkg-aur-add howdy-git linux-enable-ir-emitter
+
+echo -e "\nConfiguring Howdy...\n"
+sudo mkdir -p "$MODELS_DIR"
+[[ -f $CONFIG_FILE ]] || sudo howdy config >/dev/null 2>&1 || true  # lay down howdy's default file first
+
+# IR sensors run dark, so the histogram threshold and certainty defaults need
+# loosening from what works for a color camera. This is a reasonable starting
+# point across IR webcams, not a guarantee -- `sudo howdy config` opens the
+# file directly if a particular camera needs more.
+set_ini "$CONFIG_FILE" core workaround off
+set_ini "$CONFIG_FILE" video device_path "$ir_device"
+set_ini "$CONFIG_FILE" video dark_threshold 95
+set_ini "$CONFIG_FILE" video certainty 3.0
+set_ini "$CONFIG_FILE" video max_height 320
+
+# The lock screen calls pam_howdy.so from the user's own unprivileged shell
+# process (no setuid helper, no root daemon -- unlike fprintd/D-Bus), so it
+# has to be able to read its own config directly as that user.
+sudo chmod 644 "$CONFIG_FILE"
+
+# Fire the emitter and find the control that drives it, if we haven't already.
+if [[ ! -d /etc/linux-enable-ir-emitter ]] || [[ -z $(sudo find /etc/linux-enable-ir-emitter -type f 2>/dev/null) ]]; then
+  echo -e "\nNow configuring the infrared emitter. Watch the camera closely and"
+  echo -e "answer y only for an actual flash/strobe -- not just a steady glow.\n"
+
+  # On some cameras this never manages to save a driver control at all -- its
+  # own "is it already flashing?" pre-check short-circuits with "already
+  # working" before it ever reaches the save step, and it exits non-zero for
+  # that. That isn't a setup failure: it means this camera doesn't need a
+  # saved control, not that anything is broken. A declined-every-candidate
+  # run also exits non-zero. Either way, don't let it abort the rest of
+  # setup -- the real test of whether the emitter fires is enrollment below
+  # and the lock screen itself, not this tool's exit code.
+  set +e
+  sudo linux-enable-ir-emitter --device "$ir_device" --verbose configure --no-gui --limit -1
+  emitter_status=$?
+  set -e
+
+  if (( emitter_status != 0 )); then
+    echo -e "\n(No new driver control saved. If the camera visibly lit up above,"
+    echo -e "that's fine -- this camera doesn't need one. If it stayed dark and"
+    echo -e "face enrollment below keeps failing, try better lighting and rerun"
+    echo -e "this setup script, or see"
+    echo -e "https://github.com/EmixamPP/linux-enable-ir-emitter for camera-specific help.)\n"
+  fi
+fi
+
+# Enroll a face model if this user doesn't have one yet.
+if [[ ! -f "$MODELS_DIR/$USER.dat" ]]; then
+  echo -e "\nLet's add your face. Look at the camera and hold still.\n"
+  sudo howdy add
+fi
+
+echo -e "\nConfiguring lock screen for Howdy authentication...\n"
+sudo tee "$PAM_HOWDY" >/dev/null <<'EOF'
+#%PAM-1.0
+auth       required                    pam_howdy.so
+account    include                     system-local-login
+EOF
+
+# Patch the lock plugin to run Howdy as its own path, parallel to (and
+# independent of) fingerprint's. `omarchy update` overwrites this file since
+# it's package-owned, so this step is designed to be safely rerun -- it
+# no-ops once the patch is already present, and reapplies cleanly if an
+# update wiped it. This plugin's Service.qml notices that and tells you to
+# rerun this script when it happens.
+if ! grep -q 'omarchy-lock-howdy' "$LOCK_QML"; then
+  echo "Patching lock screen plugin for Howdy..."
+  [[ -f $LOCK_QML_ORIG ]] || sudo cp -a "$LOCK_QML" "$LOCK_QML_ORIG"
+  scratch=$(mktemp)
+  cp "$LOCK_QML" "$scratch"
+  python3 "$root/patch-lock-howdy.py" "$scratch"
+  sudo install -o root -g root -m 644 "$scratch" "$LOCK_QML"
+  rm -f "$scratch"
+  omarchy-restart-shell
+fi
+
+echo -e "\e[32m\nDone! Howdy will now try face unlock alongside your password"
+echo -e "(and fingerprint, if set up) whenever the lock screen engages.\e[0m"
+echo
+echo "Note: the lock screen change above patches a file the omarchy package"
+echo "owns (lock/Service.qml), so an 'omarchy update' can silently revert it."
+echo "This plugin's own Service.qml watches for that and will notify you if"
+echo "it happens -- just rerun this script to fix it: $root/setup"

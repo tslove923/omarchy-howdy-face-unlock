@@ -1,0 +1,27 @@
+#!/bin/bash
+
+# Print the first infrared camera device found, if any.
+#
+# IR sensors on Windows-Hello-style webcams show up as their own /dev/videoN
+# node next to the color sensor, and advertise only a bare greyscale format
+# (GREY) with nothing else -- unlike the color node, which lists MJPG/YUYV
+# alongside it. That's a reliable, driver-independent signature: it doesn't
+# depend on how any particular vendor names the device.
+#
+# Needs v4l-utils; treat it as "no IR camera" if that isn't installed yet,
+# same as a probe that ran and simply found nothing.
+command -v v4l2-ctl >/dev/null 2>&1 || exit 1
+
+for dev in /dev/video*; do
+  [[ -c $dev ]] || continue
+
+  formats=$(v4l2-ctl -d "$dev" --list-formats 2>/dev/null | grep -oE "'[A-Za-z0-9]{4}'" | tr -d "'")
+  [[ -z $formats ]] && continue
+
+  if [[ $(wc -l <<<"$formats") -eq 1 && $formats == "GREY" ]]; then
+    echo "$dev"
+    exit 0
+  fi
+done
+
+exit 1

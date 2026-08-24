@@ -1,0 +1,11 @@
+{
+  "schemaVersion": 1,
+  "id": "io.github.tslove923.howdy-face-unlock",
+  "name": "Howdy Face Unlock",
+  "version": "1.0.0",
+  "author": "tslove923",
+  "license": "MIT",
+  "description": "Face unlock for IR webcams via Howdy, mirroring the fingerprint flow: setup/remove scripts, Setup > Security menu entries, and a lock-screen health check that notifies you if an Omarchy update reverts the lock-plugin patch this depends on.",
+  "kinds": ["service"],
+  "entryPoints": { "service": "Service.qml" }
+}

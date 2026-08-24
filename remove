@@ -1,0 +1,37 @@
+#!/bin/bash
+
+# Undoes what ./setup did. Run it yourself: ~/.config/omarchy/plugins/<id>/remove
+
+set -e
+
+PAM_HOWDY="/etc/pam.d/omarchy-lock-howdy"
+LOCK_QML="/usr/share/omarchy/shell/plugins/lock/Service.qml"
+LOCK_QML_ORIG="$LOCK_QML.orig"
+
+echo -e "\e[32mRemoving face unlock (Howdy) from the lock screen.\n\e[0m"
+
+if [[ -f $PAM_HOWDY ]]; then
+  echo "Removing lock screen Howdy authentication..."
+  sudo rm -f "$PAM_HOWDY"
+fi
+
+if [[ -f $LOCK_QML_ORIG ]]; then
+  echo "Restoring the original lock screen plugin..."
+  sudo install -o root -g root -m 644 "$LOCK_QML_ORIG" "$LOCK_QML"
+  sudo rm -f "$LOCK_QML_ORIG"
+  omarchy-restart-shell
+elif grep -q 'omarchy-lock-howdy' "$LOCK_QML" 2>/dev/null; then
+  echo -e "\e[31mNo pristine backup found (Service.qml.orig) but the lock plugin"
+  echo -e "still looks patched -- leaving it alone rather than guessing at a"
+  echo -e "revert. An 'omarchy update' will overwrite it back to stock.\e[0m"
+fi
+
+echo "Removing Howdy packages..."
+omarchy-pkg-drop howdy-git linux-enable-ir-emitter python-dlib
+
+echo -e "\e[32m\nFace unlock has been completely removed.\e[0m"
+echo "(Your enrolled face model at /etc/howdy/models and /etc/howdy/config.ini"
+echo "were left in place in case you reinstall Howdy later.)"
+echo
+echo "You'll probably also want to remove the plugin itself:"
+echo "  omarchy plugin remove io.github.tslove923.howdy-face-unlock"
