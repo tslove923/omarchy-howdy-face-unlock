@@ -6,7 +6,7 @@ Mirrors the fingerprint flow as closely as Omarchy's plugin system allows.
 ## Install
 
 ```
-omarchy plugin add <this repo's URL>
+omarchy plugin add https://github.com/tslove923/omarchy-howdy-face-unlock
 ~/.config/omarchy/plugins/io.github.tslove923.howdy-face-unlock/setup
 ```
 
