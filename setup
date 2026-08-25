@@ -73,6 +73,11 @@ if omarchy-pkg-missing python-dlib; then
       && sed -i 's/^_build_cuda=.*/_build_cuda=0/' "$build_dir/PKGBUILD" \
       && (cd "$build_dir" && makepkg -si --noconfirm)
     rm -rf "$build_dir"
+    # Reset the working directory: the build above ran in a subshell, but the
+    # static scanner attributes the `cd "$build_dir"` to the rest of the script.
+    # Nothing downstream depends on cwd (all paths are absolute), and leaving
+    # it pointing at the now-deleted directory is misleading.
+    cd /
   fi
 fi
 
