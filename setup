@@ -69,9 +69,9 @@ if omarchy-pkg-missing python-dlib; then
     git init -q "$build_dir"
     git -C "$build_dir" remote add origin https://aur.archlinux.org/python-dlib.git
     git -C "$build_dir" fetch -q --depth 1 origin 84910843274aa2989f0ebb3cba3347ba7c78f6b8
-    git -C "$build_dir" checkout -q --detach FETCH_HEAD
-    sed -i 's/^_build_cuda=.*/_build_cuda=0/' "$build_dir/PKGBUILD"
-    (cd "$build_dir" && makepkg -si --noconfirm)
+    git -C "$build_dir" checkout -q --detach 84910843274aa2989f0ebb3cba3347ba7c78f6b8 \
+      && sed -i 's/^_build_cuda=.*/_build_cuda=0/' "$build_dir/PKGBUILD" \
+      && (cd "$build_dir" && makepkg -si --noconfirm)
     rm -rf "$build_dir"
   fi
 fi
