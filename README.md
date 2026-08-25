@@ -13,8 +13,10 @@ omarchy plugin add https://github.com/tslove923/omarchy-howdy-face-unlock
 `omarchy plugin add` only clones files — run `setup` yourself afterward. It
 detects your IR camera, installs `howdy-git` and `linux-enable-ir-emitter`
 from the AUR (building `python-dlib` CPU-only unless it detects an Nvidia
-GPU, to dodge that AUR package's broken CUDA subpackage), configures the
-emitter, enrolls your face, and wires up the lock screen.
+GPU, to dodge that AUR package's broken CUDA subpackage; the CPU-only build
+clones the AUR PKGBUILD pinned to a fixed commit SHA so upstream can't move
+under the build), configures the emitter, enrolls your face, and wires up
+the lock screen.
 
 Setup and removal are also reachable from the Omarchy menu: **Setup → Security
 → Face Unlock** and **Remove → Security → Face Unlock** (both only appear

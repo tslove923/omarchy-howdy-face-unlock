@@ -64,7 +64,12 @@ if omarchy-pkg-missing python-dlib; then
   else
     echo "No Nvidia GPU detected -- building python-dlib CPU-only..."
     build_dir=$(mktemp -d)
-    git clone --depth 1 https://aur.archlinux.org/python-dlib.git "$build_dir"
+    # Pin the AUR checkout to a fixed commit SHA so a later upstream move can't
+    # silently change what gets built (marketplace security baseline).
+    git init -q "$build_dir"
+    git -C "$build_dir" remote add origin https://aur.archlinux.org/python-dlib.git
+    git -C "$build_dir" fetch -q --depth 1 origin 84910843274aa2989f0ebb3cba3347ba7c78f6b8
+    git -C "$build_dir" checkout -q --detach FETCH_HEAD
     sed -i 's/^_build_cuda=.*/_build_cuda=0/' "$build_dir/PKGBUILD"
     (cd "$build_dir" && makepkg -si --noconfirm)
     rm -rf "$build_dir"
