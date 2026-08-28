@@ -151,11 +151,15 @@ EOF
 if ! grep -q 'omarchy-lock-howdy' "$LOCK_QML"; then
   echo "Patching lock screen plugin for Howdy..."
   [[ -f $LOCK_QML_ORIG ]] || sudo cp -a "$LOCK_QML" "$LOCK_QML_ORIG"
-  scratch=$(mktemp)
-  cp "$LOCK_QML" "$scratch"
-  python3 "$root/patch-lock-howdy.py" "$scratch"
-  sudo install -o root -g root -m 644 "$scratch" "$LOCK_QML"
-  rm -f "$scratch"
+  # Keep the patched temp file root-owned end to end. A user-owned copy of the
+  # lock QML crossing into `sudo install` leaves an authorization window in
+  # which its contents could be swapped before root reads them -- and the lock
+  # screen runs whatever lands in that file. So root creates, patches, installs.
+  scratch_dir=$(sudo mktemp -d)
+  sudo cp "$LOCK_QML" "$scratch_dir/Service.qml"
+  sudo python3 "$root/patch-lock-howdy.py" "$scratch_dir/Service.qml"
+  sudo install -o root -g root -m 644 "$scratch_dir/Service.qml" "$LOCK_QML"
+  sudo rm -rf "$scratch_dir"
   omarchy-restart-shell
 fi
 
