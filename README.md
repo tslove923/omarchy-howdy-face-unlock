@@ -46,6 +46,12 @@ notification telling you to rerun `setup`, instead of face unlock just
 silently going dead until you notice at the worst possible moment (i.e., at
 the lock screen).
 
+On a dev checkout (`OMARCHY_PATH` pointing at a source tree), the running
+shell loads the lock plugin from `$OMARCHY_PATH/shell/plugins/lock/Service.qml`
+rather than `/usr/share/omarchy/...`, so `setup` and this health check resolve
+that path too. A `git pull` that reverts it is the dev equivalent of an
+`omarchy update` overwriting the packaged copy.
+
 Query its health directly: `omarchy-shell howdy status` → `ok` or `broken`.
 
 ## What setup actually changes
@@ -62,7 +68,11 @@ Query its health directly: `omarchy-shell howdy status` → `ok` or `broken`.
 - `/etc/pam.d/omarchy-lock-howdy` — a PAM service dedicated to Howdy,
   independent of `omarchy-lock-fingerprint`
 - `lock/Service.qml` — a parallel `startHowdy()`/`howdyPam`/`howdyCheckProc`
-  path, wired in alongside the existing fingerprint one
+  path, wired in alongside the existing fingerprint one. When the lock
+  screen engages — e.g. when you close the lid — Howdy starts
+  authenticating right away, retrying every 250 ms until it succeeds. So
+  face unlock is already live when you open the lid: just look at the
+  camera.
 
 ## Known rough edges
 

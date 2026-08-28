@@ -11,7 +11,11 @@ CONFIG_DIR="/etc/howdy"
 MODELS_DIR="$CONFIG_DIR/models"
 CONFIG_FILE="$CONFIG_DIR/config.ini"
 PAM_HOWDY="/etc/pam.d/omarchy-lock-howdy"
-LOCK_QML="/usr/share/omarchy/shell/plugins/lock/Service.qml"
+# The shell loads its plugins from $OMARCHY_PATH/shell on a dev checkout but
+# from /usr/share/omarchy/shell on a packaged install -- patch whichever copy
+# the running shell actually reads, falling back if the variable is unset.
+LOCK_QML="${OMARCHY_PATH:-/usr/share/omarchy}/shell/plugins/lock/Service.qml"
+[[ -f $LOCK_QML ]] || LOCK_QML="/usr/share/omarchy/shell/plugins/lock/Service.qml"
 LOCK_QML_ORIG="$LOCK_QML.orig"
 
 # Sets/inserts key = value inside [section] of an ini file without disturbing

@@ -13,6 +13,8 @@ Item {
 
   property var shell: null
 
+  // Packaged default; on a dev checkout the running shell reads the lock
+  // plugin from $OMARCHY_PATH/shell instead, so the check below resolves it.
   readonly property string lockQml: "/usr/share/omarchy/shell/plugins/lock/Service.qml"
   readonly property string pamFile: "/etc/pam.d/omarchy-lock-howdy"
 
@@ -26,7 +28,9 @@ Item {
   Process {
     id: healthCheckProc
     command: ["bash", "-c",
-      "[[ -f " + root.pamFile + " ]] && grep -q omarchy-lock-howdy " + root.lockQml + " && echo ok || echo broken"]
+      "qml=${OMARCHY_PATH:-/usr/share/omarchy}/shell/plugins/lock/Service.qml; " +
+      "[[ -f $qml ]] || qml=" + root.lockQml + "; " +
+      "[[ -f " + root.pamFile + " ]] && grep -q omarchy-lock-howdy \"$qml\" && echo ok || echo broken"]
     stdout: StdioCollector {
       id: healthStdout
       waitForEnd: true
