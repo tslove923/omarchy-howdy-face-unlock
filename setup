@@ -155,13 +155,20 @@ EOF
 if ! grep -q 'omarchy-lock-howdy' "$LOCK_QML"; then
   echo "Patching lock screen plugin for Howdy..."
   [[ -f $LOCK_QML_ORIG ]] || sudo cp -a "$LOCK_QML" "$LOCK_QML_ORIG"
-  # Keep the patched temp file root-owned end to end. A user-owned copy of the
-  # lock QML crossing into `sudo install` leaves an authorization window in
-  # which its contents could be swapped before root reads them -- and the lock
-  # screen runs whatever lands in that file. So root creates, patches, installs.
+  # Keep both the staged QML and the code that patches it root-owned end to
+  # end. It's not enough to stage the data file through root -- `sudo python3
+  # "$root/patch-lock-howdy.py"` would still read the patcher straight out of
+  # this user-writable checkout, and an already-authorized sudo session (from
+  # the calls above) would run whatever bytes are sitting there at that
+  # moment as root. So root copies its own executable into the same
+  # root-owned scratch dir as the data it operates on, then runs only that
+  # copy -- nothing crossing the privilege boundary is ever read from a
+  # location the invoking user can still write to.
   scratch_dir=$(sudo mktemp -d)
   sudo cp "$LOCK_QML" "$scratch_dir/Service.qml"
-  sudo python3 "$root/patch-lock-howdy.py" "$scratch_dir/Service.qml"
+  sudo cp "$root/patch-lock-howdy.py" "$scratch_dir/patch-lock-howdy.py"
+  sudo chmod 500 "$scratch_dir/patch-lock-howdy.py"
+  sudo python3 "$scratch_dir/patch-lock-howdy.py" "$scratch_dir/Service.qml"
   sudo install -o root -g root -m 644 "$scratch_dir/Service.qml" "$LOCK_QML"
   sudo rm -rf "$scratch_dir"
   omarchy-restart-shell
