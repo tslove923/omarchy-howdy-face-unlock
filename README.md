@@ -72,7 +72,14 @@ Query its health directly: `omarchy-shell howdy status` → `ok` or `broken`.
   screen engages — e.g. when you close the lid — Howdy starts
   authenticating right away, retrying every 250 ms until it succeeds. So
   face unlock is already live when you open the lid: just look at the
-  camera.
+  camera. It gives up after 5 failed attempts in a row and falls back to
+  password-only for the rest of that lock, rather than retrying forever.
+- Before trusting Howdy as configured, the lock screen checks that
+  `/etc/pam.d/omarchy-lock-howdy`, your enrolled face model, and
+  `pam_howdy.so` are all root-owned and not group/world-writable — the
+  same way it already trusts nothing it can't verify for fingerprint/PAM.
+  Session code able to rewrite any of those could otherwise enroll a face
+  everyone matches or swap in an auth module that always succeeds.
 
 ## Known rough edges
 
