@@ -39,12 +39,21 @@ other. So `setup` still has to hand-patch
 would if this were a loose script. That file is package-owned, so an
 `omarchy update` can silently revert the patch.
 
-What the plugin *does* buy: this repo's `Service.qml` runs as a real
-first-class Omarchy service and checks on every shell start whether that
-patch survived. If an update wiped it, you get a critical desktop
-notification telling you to rerun `setup`, instead of face unlock just
-silently going dead until you notice at the worst possible moment (i.e., at
-the lock screen).
+What the plugin *does* buy: `setup` installs a `post-update` hook
+(`omarchy hook install post-update ...`) that runs during `omarchy update`,
+right after system packages and migrations — i.e. right after the patch may
+have just been overwritten. It re-patches the file there, silently, while
+`omarchy update`'s own sudo session is still authenticated, so face unlock
+survives an update on its own; you don't need to notice anything or rerun
+`setup` yourself in the common case.
+
+That repair can only fail if sudo isn't authenticated non-interactively at
+that point (e.g. an unusual update flow). For that case, this repo's
+`Service.qml` also runs as a real first-class Omarchy service and checks on
+every shell start whether the patch survived. If it's still missing, you get
+a critical desktop notification telling you to rerun `setup`, instead of face
+unlock just silently going dead until you notice at the worst possible moment
+(i.e., at the lock screen).
 
 On a dev checkout (`OMARCHY_PATH` pointing at a source tree), the running
 shell loads the lock plugin from `$OMARCHY_PATH/shell/plugins/lock/Service.qml`

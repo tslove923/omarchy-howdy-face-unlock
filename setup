@@ -174,10 +174,25 @@ if ! grep -q 'omarchy-lock-howdy' "$LOCK_QML"; then
   omarchy-restart-shell
 fi
 
+# lock/Service.qml is package-owned, so `omarchy update` can silently revert
+# the patch above. Install a post-update hook that re-patches it automatically,
+# in the same `omarchy update` run, while pacman's sudo authorization is still
+# warm -- so face unlock survives an update without the user having to notice
+# a notification and rerun this script by hand. Idempotent: reinstalling just
+# overwrites the same file.
+if command -v omarchy >/dev/null 2>&1; then
+  omarchy hook install post-update "$root/hooks/post-update.d/repair-howdy-lock.hook"
+else
+  echo -e "\e[33mCouldn't find 'omarchy' to install the auto-repair hook -- \e[0m"
+  echo -e "\e[33myou'll need to rerun this script by hand after updates instead.\e[0m"
+fi
+
 echo -e "\e[32m\nDone! Howdy will now try face unlock alongside your password"
 echo -e "(and fingerprint, if set up) whenever the lock screen engages.\e[0m"
 echo
 echo "Note: the lock screen change above patches a file the omarchy package"
 echo "owns (lock/Service.qml), so an 'omarchy update' can silently revert it."
-echo "This plugin's own Service.qml watches for that and will notify you if"
-echo "it happens -- just rerun this script to fix it: $root/setup"
+echo "A post-update hook now re-patches it automatically on every update; if"
+echo "that ever can't complete (e.g. sudo isn't authenticated at that point),"
+echo "this plugin's own Service.qml watchdog will notice and notify you to"
+echo "rerun this script by hand: $root/setup"
