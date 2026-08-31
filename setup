@@ -17,6 +17,10 @@ PAM_HOWDY="/etc/pam.d/omarchy-lock-howdy"
 LOCK_QML="${OMARCHY_PATH:-/usr/share/omarchy}/shell/plugins/lock/Service.qml"
 [[ -f $LOCK_QML ]] || LOCK_QML="/usr/share/omarchy/shell/plugins/lock/Service.qml"
 LOCK_QML_ORIG="$LOCK_QML.orig"
+# Expected sha256 of patch-lock-howdy.py at this commit. Root verifies the
+# staged copy against this fixed value before executing it (see the patch
+# step below) -- bump this alongside any change to that file.
+PATCHER_SHA256="c741a5010d69703ed889e605bbbf13e685897f7205d4c0369a5e6cd10b700595"
 
 # Sets/inserts key = value inside [section] of an ini file without disturbing
 # anything else in it -- howdy's config.ini is heavily commented, and a
@@ -155,18 +159,27 @@ EOF
 if ! grep -q 'omarchy-lock-howdy' "$LOCK_QML"; then
   echo "Patching lock screen plugin for Howdy..."
   [[ -f $LOCK_QML_ORIG ]] || sudo cp -a "$LOCK_QML" "$LOCK_QML_ORIG"
-  # Keep both the staged QML and the code that patches it root-owned end to
-  # end. It's not enough to stage the data file through root -- `sudo python3
-  # "$root/patch-lock-howdy.py"` would still read the patcher straight out of
-  # this user-writable checkout, and an already-authorized sudo session (from
-  # the calls above) would run whatever bytes are sitting there at that
-  # moment as root. So root copies its own executable into the same
-  # root-owned scratch dir as the data it operates on, then runs only that
-  # copy -- nothing crossing the privilege boundary is ever read from a
-  # location the invoking user can still write to.
+  # Root stages both the QML and the patcher into a root-owned scratch dir
+  # before touching either, so nothing it reads is a path the invoking user
+  # can still write to *by name*. That alone isn't enough, though: the sudo
+  # timestamp is already warm from the calls above, so the user-writable
+  # checkout this cp reads from could be swapped right up until the cp runs
+  # -- moving the read into a root-owned dir shrinks the window but doesn't
+  # close it, since root still executed whatever bytes were staged. Root
+  # closes it for real by checking what actually got staged, not where it
+  # came from: verify the copy's hash against the value pinned above before
+  # ever executing it, and refuse on mismatch. After that, the copy can come
+  # from anywhere -- root has independently established what it's about to run.
   scratch_dir=$(sudo mktemp -d)
   sudo cp "$LOCK_QML" "$scratch_dir/Service.qml"
   sudo cp "$root/patch-lock-howdy.py" "$scratch_dir/patch-lock-howdy.py"
+  staged_sha256=$(sudo sha256sum "$scratch_dir/patch-lock-howdy.py" | awk '{print $1}')
+  if [[ $staged_sha256 != "$PATCHER_SHA256" ]]; then
+    sudo rm -rf "$scratch_dir"
+    echo -e "\e[31mpatch-lock-howdy.py hash mismatch (expected $PATCHER_SHA256, got $staged_sha256).\e[0m" >&2
+    echo -e "\e[31mRefusing to run it as root. Re-clone this plugin and try again.\e[0m" >&2
+    exit 1
+  fi
   sudo chmod 500 "$scratch_dir/patch-lock-howdy.py"
   sudo python3 "$scratch_dir/patch-lock-howdy.py" "$scratch_dir/Service.qml"
   sudo install -o root -g root -m 644 "$scratch_dir/Service.qml" "$LOCK_QML"

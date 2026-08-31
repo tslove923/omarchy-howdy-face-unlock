@@ -17,6 +17,11 @@ LOCK_QML="${OMARCHY_PATH:-/usr/share/omarchy}/shell/plugins/lock/Service.qml"
 
 PLUGIN_DIR="$HOME/.config/omarchy/plugins/io.github.tslove923.howdy-face-unlock"
 PATCHER="$PLUGIN_DIR/patch-lock-howdy.py"
+# Expected sha256 of patch-lock-howdy.py -- must match the constant in setup.
+# Root verifies the staged copy against this before executing it, so the
+# sudo session warm from omarchy-update's own pacman prompt can't be made to
+# run whatever happens to be sitting in this user-writable plugin checkout.
+PATCHER_SHA256="c741a5010d69703ed889e605bbbf13e685897f7205d4c0369a5e6cd10b700595"
 
 [[ -f $PLUGIN_DIR/manifest.json ]] || exit 0  # plugin removed; nothing to repair
 [[ -f $LOCK_QML ]] || exit 0                  # nothing to patch yet
@@ -34,11 +39,21 @@ sudo -n true 2>/dev/null || {
   exit 0
 }
 
-# Same root-owned-scratch-dir pattern as setup: neither the staged QML nor
-# the patcher script crosses the privilege boundary from a user-writable path.
+# Same root-owned-scratch-dir-plus-hash-check pattern as setup: staging
+# through root alone only shrinks the window where a user-writable checkout
+# could be swapped before its bytes run as root, since the sudo timestamp is
+# already warm here from omarchy-update's own pacman prompt. Verifying the
+# staged copy's hash before executing it closes that window instead of just
+# narrowing it -- root checks what it's about to run, not just where it
+# staged it from.
 scratch_dir=$(sudo -n mktemp -d) || exit 0
 sudo -n cp "$LOCK_QML" "$scratch_dir/Service.qml" &&
-sudo -n cp "$PATCHER" "$scratch_dir/patch-lock-howdy.py" &&
+sudo -n cp "$PATCHER" "$scratch_dir/patch-lock-howdy.py"
+if [[ $(sudo -n sha256sum "$scratch_dir/patch-lock-howdy.py" 2>/dev/null | awk '{print $1}') != "$PATCHER_SHA256" ]]; then
+  sudo -n rm -rf "$scratch_dir"
+  echo "Howdy Face Unlock: patch-lock-howdy.py hash mismatch; skipping repair (will notify instead)." >&2
+  exit 0
+fi
 sudo -n chmod 500 "$scratch_dir/patch-lock-howdy.py" &&
 sudo -n python3 "$scratch_dir/patch-lock-howdy.py" "$scratch_dir/Service.qml" &&
 sudo -n install -o root -g root -m 644 "$scratch_dir/Service.qml" "$LOCK_QML"
