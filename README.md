@@ -63,6 +63,27 @@ that path too. A `git pull` that reverts it is the dev equivalent of an
 
 Query its health directly: `omarchy-shell howdy status` → `ok` or `broken`.
 
+### How the patch step stays safe to run as root
+
+Both `setup` and the post-update hook patch `lock/Service.qml` by staging a
+copy into a root-owned scratch dir (`sudo mktemp -d`, mode `700`) and running
+`patch-lock-howdy.py` from there instead of straight out of this checkout.
+Staging alone isn't enough, though: by the time that patch step runs, `sudo`
+is already authenticated from earlier in the same script (or, for the hook,
+from `omarchy update`'s own pacman prompt) — so anything running as the
+invoking user could still swap `patch-lock-howdy.py` in this user-writable
+checkout right up until root's `cp` reads it, and root would stage and
+execute those swapped bytes instead. Moving the read into a root-owned
+directory shrinks that window; it doesn't close it.
+
+What closes it: both call sites pin `patch-lock-howdy.py`'s sha256 as a
+constant and have root verify the staged copy against it before ever
+executing it, refusing on mismatch. That checks *what* is about to run
+rather than *where* it was staged from, so a swapped file is caught
+regardless of timing. Bump the pinned hash in both `setup` and
+`hooks/post-update.d/repair-howdy-lock.hook` if you ever modify
+`patch-lock-howdy.py`.
+
 ## What setup actually changes
 
 - Installs `howdy-git`, `linux-enable-ir-emitter`, `v4l-utils`, `python-dlib`
