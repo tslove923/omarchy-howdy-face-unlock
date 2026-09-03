@@ -122,3 +122,43 @@ regardless of timing. Bump the pinned hash in both `setup` and
   and [discussion #4982](https://github.com/basecamp/omarchy/discussions/4982)).
   This plugin exists so face unlock works today, independent of how that
   settles upstream.
+
+## Incompatible with lock-screen replacement plugins
+
+Plugins that replace the lock screen entirely — e.g.
+[Lock Screen Explorer](https://github.com/SirJul1337/omarchy-lock-explorer)
+(`io.github.sirjul1337.lock-explorer`) — don't work alongside this one, and
+that's an Omarchy plugin-system limitation, not a bug in either plugin.
+
+Those plugins declare `"omarchy": {"clonedFrom": "omarchy.lock"}` in their
+manifest. Enabling one makes Omarchy disable the stock `omarchy.lock`
+service and load the replacement's own `Service.qml` for the `lock` IPC
+target instead (Lock Screen Explorer's own README: *"the shell swaps
+them... `io.github.sirjul1337.lock-explorer` should be enabled and
+`omarchy.lock` should be in `disabled`"*). This plugin's `setup` only ever
+patches the stock file at
+`${OMARCHY_PATH:-/usr/share/omarchy}/shell/plugins/lock/Service.qml` — so
+once a clonedFrom replacement is enabled, that file is patched correctly but
+never loaded, and Howdy silently has nothing to run against.
+
+It also isn't just a "wrong file" problem: pointing `patch-lock-howdy.py` at
+Lock Screen Explorer's own `Service.qml` (checked against its v1.5.5 source,
+which is itself based on the stock file) fails partway through, by design —
+several of its patch anchors (the `beginLock()` `Qt.callLater(...)` block,
+`Component.onCompleted`, the IPC status object literal, and `preview()`) no
+longer match verbatim, because that plugin interleaves its own logic
+(avatar detection, clip-design wallpaper prep, a `multimedia` flag, preview
+animation state) at exactly those points. `patch-lock-howdy.py` aborts with
+"Patch target not found" rather than applying partially, so nothing gets
+corrupted — but it also means the fix isn't a small patch-set tweak; it
+would need its own anchors tuned to, and kept in sync with, a plugin that
+ships fast, independent updates.
+
+Net effect: you can have Howdy's auto-fire face auth *or* a `clonedFrom`
+lock-screen replacement like Lock Screen Explorer, not both — Omarchy only
+loads one `lock`-targeting service at a time. If you want both, the only
+path today is manual: port the `howdy*` properties/functions/`PamContext`/
+`Timer`/`Process` block that `patch-lock-howdy.py` adds (read the patches in
+that file for the exact pieces) into the replacement plugin's own
+`Service.qml` yourself, and redo it after any of that plugin's updates that
+touch the same regions.
