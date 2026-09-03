@@ -100,10 +100,18 @@ regardless of timing. Bump the pinned hash in both `setup` and
 - `lock/Service.qml` — a parallel `startHowdy()`/`howdyPam`/`howdyCheckProc`
   path, wired in alongside the existing fingerprint one. When the lock
   screen engages — e.g. when you close the lid — Howdy starts
-  authenticating right away, retrying every 250 ms until it succeeds. So
-  face unlock is already live when you open the lid: just look at the
-  camera. It gives up after 5 failed attempts in a row and falls back to
-  password-only for the rest of that lock, rather than retrying forever.
+  authenticating right away, retrying every 250 ms on failure. So face
+  unlock is already live when you open the lid: just look at the camera.
+  A failed attempt only keeps retrying while there's been recent activity
+  (the lock just engaged, or a wake signal — mouse move, key press, a
+  password attempt — within the last 10s); otherwise retries pause instead
+  of burning through attempts against an empty room while nobody's there.
+  Any wake signal while paused (or even after full lockout) resets the
+  attempt count and re-arms a fresh attempt immediately, so face unlock is
+  live again the moment you're actually back — not still shaking off a
+  lockout from the last time it scanned an empty desk. Only 5 failed
+  attempts in a row *with* someone actually present trips the fallback to
+  password-only for the rest of that lock.
 - Before trusting Howdy as configured, the lock screen checks that
   `/etc/pam.d/omarchy-lock-howdy`, your enrolled face model, and
   `pam_howdy.so` are all root-owned and not group/world-writable — the

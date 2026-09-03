@@ -20,7 +20,7 @@ LOCK_QML_ORIG="$LOCK_QML.orig"
 # Expected sha256 of patch-lock-howdy.py at this commit. Root verifies the
 # staged copy against this fixed value before executing it (see the patch
 # step below) -- bump this alongside any change to that file.
-PATCHER_SHA256="c741a5010d69703ed889e605bbbf13e685897f7205d4c0369a5e6cd10b700595"
+PATCHER_SHA256="7f18965b4a6b6033df85a8e0d631a20783632e81447acc3ce1bd69d2b90c5054"
 
 # Sets/inserts key = value inside [section] of an ini file without disturbing
 # anything else in it -- howdy's config.ini is heavily commented, and a
