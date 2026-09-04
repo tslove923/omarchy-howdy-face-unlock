@@ -10,6 +10,8 @@ PAM_HOWDY="/etc/pam.d/omarchy-lock-howdy"
 LOCK_QML="${OMARCHY_PATH:-/usr/share/omarchy}/shell/plugins/lock/Service.qml"
 [[ -f $LOCK_QML ]] || LOCK_QML="/usr/share/omarchy/shell/plugins/lock/Service.qml"
 LOCK_QML_ORIG="$LOCK_QML.orig"
+EXPLORER_QML="$HOME/.config/omarchy/plugins/io.github.sirjul1337.lock-explorer/Service.qml"
+EXPLORER_QML_ORIG="$EXPLORER_QML.orig"
 POST_UPDATE_HOOK="$HOME/.config/omarchy/hooks/post-update.d/repair-howdy-lock.hook"
 
 echo -e "\e[32mRemoving face unlock (Howdy) from the lock screen.\n\e[0m"
@@ -33,6 +35,19 @@ elif grep -q 'omarchy-lock-howdy' "$LOCK_QML" 2>/dev/null; then
   echo -e "\e[31mNo pristine backup found (Service.qml.orig) but the lock plugin"
   echo -e "still looks patched -- leaving it alone rather than guessing at a"
   echo -e "revert. An 'omarchy update' will overwrite it back to stock.\e[0m"
+fi
+
+if [[ -f $EXPLORER_QML_ORIG ]]; then
+  echo "Restoring Lock Screen Explorer's original lock screen..."
+  cp -a "$EXPLORER_QML_ORIG" "$EXPLORER_QML"
+  rm -f "$EXPLORER_QML_ORIG"
+  # Unlike the stock file, no restart here: this file is only ever live
+  # while Lock Screen Explorer is enabled, and forcing a shell restart on
+  # every plugin removal for a file that's usually dormant isn't worth the
+  # disruption. It picks up on the next restart either way.
+elif grep -q 'omarchy-lock-howdy' "$EXPLORER_QML" 2>/dev/null; then
+  echo -e "\e[31mNo pristine backup found for Lock Screen Explorer's Service.qml but it"
+  echo -e "still looks patched -- leaving it alone rather than guessing at a revert.\e[0m"
 fi
 
 echo "Removing Howdy packages..."

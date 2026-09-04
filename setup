@@ -187,6 +187,68 @@ if ! grep -q 'omarchy-lock-howdy' "$LOCK_QML"; then
   omarchy-restart-shell
 fi
 
+# Lock Screen Explorer (io.github.sirjul1337.lock-explorer) is a
+# `clonedFrom: omarchy.lock` replacement -- when it's enabled, Omarchy
+# disables the stock lock plugin patched above and loads Explorer's own
+# Service.qml for the `lock` IPC target instead (see the README's
+# "Lock-screen replacement plugins" section, and issue #1). Patch its copy
+# too, whenever it's installed, regardless of whether
+# it's the currently *enabled* target -- so Howdy is already wired in
+# however and whenever the user switches between the two.
+#
+# Unlike the stock file above, Explorer's Service.qml lives in the user's
+# own plugin checkout (~/.config/omarchy/plugins/...), not a package-owned
+# system path -- the invoking user already owns it outright, so patching it
+# doesn't cross a privilege boundary the way writing to /usr/share/omarchy
+# does. That's why this step runs the patcher directly instead of the
+# root-owned-scratch-dir-plus-hash-verification dance above: that dance
+# defends against a warm sudo timestamp being used to run tampered bytes
+# as root. With no privilege escalation here, anyone who could tamper with
+# this patcher could equally tamper with anything else this user's own
+# shell already trusts (~/.bashrc and so on) -- the extra ceremony
+# wouldn't buy anything real.
+#
+# Also unlike the stock step, a failure here does NOT abort setup: Lock
+# Screen Explorer is a fast-moving third-party plugin outside this
+# project's control, and its structure *will* eventually drift out from
+# under patch-lock-howdy-explorer.py's anchors (see that file's
+# docstring). When that happens, the rest of Howdy's install (packages,
+# camera, enrollment, the stock lock patch, the auto-repair hook) should
+# still succeed -- Explorer compatibility is a bonus, not a precondition.
+EXPLORER_QML="$HOME/.config/omarchy/plugins/io.github.sirjul1337.lock-explorer/Service.qml"
+EXPLORER_QML_ORIG="$EXPLORER_QML.orig"
+if [[ -f $EXPLORER_QML ]] && ! grep -q 'omarchy-lock-howdy' "$EXPLORER_QML"; then
+  echo "Lock Screen Explorer detected -- patching its lock screen for Howdy too..."
+  [[ -f $EXPLORER_QML_ORIG ]] || cp -a "$EXPLORER_QML" "$EXPLORER_QML_ORIG"
+  if python3 "$root/patch-lock-howdy-explorer.py" "$EXPLORER_QML"; then
+    echo "Patched Lock Screen Explorer's lock screen for Howdy."
+  else
+    echo -e "\e[33mCouldn't patch Lock Screen Explorer's Service.qml (its structure may have\e[0m"
+    echo -e "\e[33mchanged upstream) -- continuing without Explorer support. Howdy still works\e[0m"
+    echo -e "\e[33mwith the stock lock screen. See this plugin's README for details.\e[0m"
+  fi
+fi
+
+# Tell the user which of the two patched files is actually live right now
+# -- Omarchy only loads one `lock`-targeting service at a time, so whichever
+# one isn't currently enabled is patched-but-dormant until they switch.
+if [[ -f $EXPLORER_QML ]] && command -v omarchy >/dev/null 2>&1; then
+  explorer_active=$(omarchy plugin list --json 2>/dev/null | python3 -c '
+import json, sys
+try:
+    plugins = json.load(sys.stdin)
+except Exception:
+    plugins = []
+print("yes" if any(p.get("id") == "io.github.sirjul1337.lock-explorer" and p.get("enabled") for p in plugins) else "no")
+' 2>/dev/null)
+  if [[ $explorer_active == yes ]]; then
+    echo -e "\e[33mNote: Lock Screen Explorer is currently enabled, so it -- not the stock\e[0m"
+    echo -e "\e[33mlock screen -- is what actually runs when you lock. Howdy's patch to\e[0m"
+    echo -e "\e[33mExplorer's own Service.qml (above) is what's live; the stock patch is\e[0m"
+    echo -e "\e[33mdormant until you disable Explorer.\e[0m"
+  fi
+fi
+
 # lock/Service.qml is package-owned, so `omarchy update` can silently revert
 # the patch above. Install a post-update hook that re-patches it automatically,
 # in the same `omarchy update` run, while pacman's sudo authorization is still
@@ -209,3 +271,11 @@ echo "A post-update hook now re-patches it automatically on every update; if"
 echo "that ever can't complete (e.g. sudo isn't authenticated at that point),"
 echo "this plugin's own Service.qml watchdog will notice and notify you to"
 echo "rerun this script by hand: $root/setup"
+if [[ -f $EXPLORER_QML ]] && grep -q 'omarchy-lock-howdy' "$EXPLORER_QML"; then
+  echo
+  echo "Lock Screen Explorer's own Service.qml was patched too. There is no"
+  echo "'omarchy plugin update' hook to catch that plugin's own updates"
+  echo "reverting it (Omarchy has no post-plugin-update hook point today) --"
+  echo "this plugin's watchdog will still notice and tell you to rerun this"
+  echo "script if that happens."
+fi

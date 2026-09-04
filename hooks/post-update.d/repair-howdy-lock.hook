@@ -9,13 +9,17 @@
 
 set -u
 
+PLUGIN_DIR="$HOME/.config/omarchy/plugins/io.github.tslove923.howdy-face-unlock"
+[[ -f $PLUGIN_DIR/manifest.json ]] || exit 0  # plugin removed; nothing to repair
+
+# ------------------------------------------------------------ stock lock --
+
 # The shell loads its plugins from $OMARCHY_PATH/shell on a dev checkout but
 # from /usr/share/omarchy/shell on a packaged install -- match setup's own
 # resolution so this repairs whichever copy the running shell actually reads.
 LOCK_QML="${OMARCHY_PATH:-/usr/share/omarchy}/shell/plugins/lock/Service.qml"
 [[ -f $LOCK_QML ]] || LOCK_QML="/usr/share/omarchy/shell/plugins/lock/Service.qml"
 
-PLUGIN_DIR="$HOME/.config/omarchy/plugins/io.github.tslove923.howdy-face-unlock"
 PATCHER="$PLUGIN_DIR/patch-lock-howdy.py"
 # Expected sha256 of patch-lock-howdy.py -- must match the constant in setup.
 # Root verifies the staged copy against this before executing it, so the
@@ -23,49 +27,76 @@ PATCHER="$PLUGIN_DIR/patch-lock-howdy.py"
 # run whatever happens to be sitting in this user-writable plugin checkout.
 PATCHER_SHA256="7f18965b4a6b6033df85a8e0d631a20783632e81447acc3ce1bd69d2b90c5054"
 
-[[ -f $PLUGIN_DIR/manifest.json ]] || exit 0  # plugin removed; nothing to repair
-[[ -f $LOCK_QML ]] || exit 0                  # nothing to patch yet
-grep -q 'omarchy-lock-howdy' "$LOCK_QML" && exit 0  # already patched
+if [[ -f $LOCK_QML ]] && ! grep -q 'omarchy-lock-howdy' "$LOCK_QML"; then
+  echo "Howdy Face Unlock: re-patching lock screen after update..."
 
-echo "Howdy Face Unlock: re-patching lock screen after update..."
+  # omarchy-update already ran the pacman step under sudo in this same
+  # terminal, so sudo should still be authenticated here without a fresh
+  # prompt. If it isn't (e.g. this hook ran long after that, or credentials
+  # were reset), fail quietly -- the watchdog in this plugin's own
+  # Service.qml will still notice and tell the user to rerun setup by hand.
+  if ! sudo -n true 2>/dev/null; then
+    echo "Howdy Face Unlock: sudo not available non-interactively; skipping repair (will notify instead)."
+  else
+    # Same root-owned-scratch-dir-plus-hash-check pattern as setup: staging
+    # through root alone only shrinks the window where a user-writable checkout
+    # could be swapped before its bytes run as root, since the sudo timestamp is
+    # already warm here from omarchy-update's own pacman prompt. Verifying the
+    # staged copy's hash before executing it closes that window instead of just
+    # narrowing it -- root checks what it's about to run, not just where it
+    # staged it from.
+    scratch_dir=$(sudo -n mktemp -d) || exit 0
+    sudo -n cp "$LOCK_QML" "$scratch_dir/Service.qml" &&
+    sudo -n cp "$PATCHER" "$scratch_dir/patch-lock-howdy.py"
+    if [[ $(sudo -n sha256sum "$scratch_dir/patch-lock-howdy.py" 2>/dev/null | awk '{print $1}') != "$PATCHER_SHA256" ]]; then
+      sudo -n rm -rf "$scratch_dir"
+      echo "Howdy Face Unlock: patch-lock-howdy.py hash mismatch; skipping repair (will notify instead)." >&2
+    else
+      sudo -n chmod 500 "$scratch_dir/patch-lock-howdy.py" &&
+      sudo -n python3 "$scratch_dir/patch-lock-howdy.py" "$scratch_dir/Service.qml" &&
+      sudo -n install -o root -g root -m 644 "$scratch_dir/Service.qml" "$LOCK_QML"
+      patch_status=$?
+      sudo -n rm -rf "$scratch_dir"
 
-# omarchy-update already ran the pacman step under sudo in this same
-# terminal, so sudo should still be authenticated here without a fresh
-# prompt. If it isn't (e.g. this hook ran long after that, or credentials
-# were reset), fail quietly -- the watchdog in this plugin's own
-# Service.qml will still notice and tell the user to rerun setup by hand.
-sudo -n true 2>/dev/null || {
-  echo "Howdy Face Unlock: sudo not available non-interactively; skipping repair (will notify instead)."
-  exit 0
-}
-
-# Same root-owned-scratch-dir-plus-hash-check pattern as setup: staging
-# through root alone only shrinks the window where a user-writable checkout
-# could be swapped before its bytes run as root, since the sudo timestamp is
-# already warm here from omarchy-update's own pacman prompt. Verifying the
-# staged copy's hash before executing it closes that window instead of just
-# narrowing it -- root checks what it's about to run, not just where it
-# staged it from.
-scratch_dir=$(sudo -n mktemp -d) || exit 0
-sudo -n cp "$LOCK_QML" "$scratch_dir/Service.qml" &&
-sudo -n cp "$PATCHER" "$scratch_dir/patch-lock-howdy.py"
-if [[ $(sudo -n sha256sum "$scratch_dir/patch-lock-howdy.py" 2>/dev/null | awk '{print $1}') != "$PATCHER_SHA256" ]]; then
-  sudo -n rm -rf "$scratch_dir"
-  echo "Howdy Face Unlock: patch-lock-howdy.py hash mismatch; skipping repair (will notify instead)." >&2
-  exit 0
+      if (( patch_status != 0 )); then
+        echo "Howdy Face Unlock: automatic repair failed; rerun $PLUGIN_DIR/setup" >&2
+      else
+        echo "Howdy Face Unlock: lock screen re-patched."
+        # The shell will pick this up on its own next restart/health-check
+        # poll; omarchy-update's own end-of-run restart (or
+        # omarchy-restart-shell) covers the common case, so don't force a
+        # restart mid-update here.
+      fi
+    fi
+  fi
 fi
-sudo -n chmod 500 "$scratch_dir/patch-lock-howdy.py" &&
-sudo -n python3 "$scratch_dir/patch-lock-howdy.py" "$scratch_dir/Service.qml" &&
-sudo -n install -o root -g root -m 644 "$scratch_dir/Service.qml" "$LOCK_QML"
-patch_status=$?
-sudo -n rm -rf "$scratch_dir"
 
-if (( patch_status != 0 )); then
-  echo "Howdy Face Unlock: automatic repair failed; rerun $PLUGIN_DIR/setup" >&2
-  exit 0
+# ------------------------------------------------------- lock explorer ---
+
+# Lock Screen Explorer (io.github.sirjul1337.lock-explorer) keeps its own
+# Service.qml in the user's plugin checkout, independent of the stock file
+# above -- see patch-lock-howdy-explorer.py and setup for the full design
+# rationale. `omarchy update` doesn't touch that checkout (it's pulled by
+# `omarchy plugin update`, a separate command with no hook point of its
+# own today), so this mainly re-catches drift from something else having
+# reset it -- a manual git reset, a corrupted checkout, etc. It's a cheap
+# extra safety net on every `omarchy update` run, not the primary repair
+# path for that plugin's own updates; this plugin's Service.qml watchdog
+# is what catches those (see setup's closing note).
+EXPLORER_QML="$HOME/.config/omarchy/plugins/io.github.sirjul1337.lock-explorer/Service.qml"
+if [[ -f $EXPLORER_QML ]] && ! grep -q 'omarchy-lock-howdy' "$EXPLORER_QML"; then
+  echo "Howdy Face Unlock: re-patching Lock Screen Explorer after update..."
+  # No root, no hash-check dance: this file is already owned by the
+  # invoking user (same as the rest of their plugin checkouts), so running
+  # the patcher against it doesn't cross a privilege boundary the way the
+  # stock, package-owned file above does -- see setup's comment on this
+  # same point for the full reasoning.
+  if python3 "$PLUGIN_DIR/patch-lock-howdy-explorer.py" "$EXPLORER_QML"; then
+    echo "Howdy Face Unlock: Lock Screen Explorer's lock screen re-patched."
+  else
+    echo "Howdy Face Unlock: Explorer repair failed (its structure may have changed" >&2
+    echo "upstream); rerun $PLUGIN_DIR/setup or see this plugin's README." >&2
+  fi
 fi
 
-echo "Howdy Face Unlock: lock screen re-patched."
-# The shell will pick this up on its own next restart/health-check poll;
-# omarchy-update's own end-of-run restart (or omarchy-restart-shell) covers
-# the common case, so don't force a restart mid-update here.
+exit 0
