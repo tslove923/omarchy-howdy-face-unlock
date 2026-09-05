@@ -21,7 +21,7 @@ PATCHER="$PLUGIN_DIR/patch-lock-howdy.py"
 # Root verifies the staged copy against this before executing it, so the
 # sudo session warm from omarchy-update's own pacman prompt can't be made to
 # run whatever happens to be sitting in this user-writable plugin checkout.
-PATCHER_SHA256="7f18965b4a6b6033df85a8e0d631a20783632e81447acc3ce1bd69d2b90c5054"
+PATCHER_SHA256="d29d23ad2c29ca77b9244148aa5e60ae82e67b4e39149075a1ed60364e71e8fa"
 
 [[ -f $PLUGIN_DIR/manifest.json ]] || exit 0  # plugin removed; nothing to repair
 [[ -f $LOCK_QML ]] || exit 0                  # nothing to patch yet
