@@ -123,7 +123,9 @@ trusts, so the same ceremony there wouldn't buy anything real.
   live again the moment you're actually back — not still shaking off a
   lockout from the last time it scanned an empty desk. Only 5 failed
   attempts in a row *with* someone actually present trips the fallback to
-  password-only for the rest of that lock.
+  password-only for the rest of that lock. A retry never starts while a
+  password submission is already in flight, so typing your password
+  doesn't risk a fresh camera scan landing right as it succeeds.
 - Before trusting Howdy as configured, the lock screen checks that
   `/etc/pam.d/omarchy-lock-howdy`, your enrolled face model, and
   `pam_howdy.so` are all root-owned and not group/world-writable — the
