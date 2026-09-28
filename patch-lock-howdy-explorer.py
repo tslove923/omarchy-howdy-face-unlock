@@ -34,8 +34,10 @@ an upstream change to this file fails loudly here instead of silently
 applying to the wrong spot or corrupting it.
 
 Verified against Lock Screen Explorer's actual installed source at
-manifest version 1.5.5, commit 08c454f ("Show the applied theme on the
-shutdown splash too"). This plugin ships fast, independent updates, so
+manifest version 1.9.1, commit ea73799 ("Merge pull request #49 from
+SirJul1337/fix/theme-switch-wallpaper"). Explorer 1.9 has its own
+facelock-based face unlock (facePam / omarchy-lock-face); the Howdy path
+added here runs alongside it and doesn't touch it. This plugin ships fast, independent updates, so
 these anchors *will* eventually drift -- that's expected, not a bug in
 this file. When one goes stale, `setup` and the post-update repair hook
 both treat a failure here as non-fatal (they warn and move on rather than
@@ -47,13 +49,14 @@ import sys
 PATCHES = [
     # ---- Anchors that still match the stock file's patch verbatim -------
     (
+        # Explorer 1.9 slots its own (facelock-based) face-unlock state in
+        # right after fingerprintAuthenticating, so every Howdy property
+        # goes in at that one spot instead of being split across two.
         '  property bool fingerprintAuthenticating: false\n'
-        '  property bool passwordPamConfigured: false\n'
-        '  property bool fingerprintConfigured: false\n',
+        '  property bool faceAuthenticating: false\n',
         '  property bool fingerprintAuthenticating: false\n'
+        '  property bool faceAuthenticating: false\n'
         '  property bool howdyAuthenticating: false\n'
-        '  property bool passwordPamConfigured: false\n'
-        '  property bool fingerprintConfigured: false\n'
         '  property bool howdyConfigured: false\n'
         '  property int howdyAttempts: 0\n'
         '  property bool howdyFaceLockedOut: false\n'
@@ -63,8 +66,8 @@ PATCHES = [
         '  readonly property int howdyActiveWindowMs: 10000\n'
     ),
     (
-        '  readonly property bool authenticating: authenticatingPassword || fingerprintAuthenticating\n',
-        '  readonly property bool authenticating: authenticatingPassword || fingerprintAuthenticating || howdyAuthenticating\n'
+        '  readonly property bool authenticating: authenticatingPassword || fingerprintAuthenticating || faceAuthenticating || fido2Authenticating\n',
+        '  readonly property bool authenticating: authenticatingPassword || fingerprintAuthenticating || faceAuthenticating || fido2Authenticating || howdyAuthenticating\n'
     ),
     (
         '  function refreshFingerprintStatus() {\n'
@@ -79,24 +82,20 @@ PATCHES = [
         '  }\n'
     ),
     (
-        '    authenticatingPassword = false\n'
-        '    fingerprintAuthenticating = false\n'
-        '    fingerprintRetryTimer.stop()\n'
-        '    if (passwordPam.active) passwordPam.abort()\n'
+        # resetAuthenticationState(): Explorer 1.9 appends face and FIDO2
+        # teardown after the fingerprint abort, so anchor on that tail.
         '    if (fingerprintPam.active) fingerprintPam.abort()\n'
-        '  }\n',
-        '    authenticatingPassword = false\n'
-        '    fingerprintAuthenticating = false\n'
+        '    if (facePam.active) facePam.abort()\n'
+        '    abortFido2()\n',
+        '    if (fingerprintPam.active) fingerprintPam.abort()\n'
+        '    if (facePam.active) facePam.abort()\n'
         '    howdyAuthenticating = false\n'
         '    howdyAttempts = 0\n'
         '    howdyFaceLockedOut = false\n'
         '    howdyRetryPaused = false\n'
-        '    fingerprintRetryTimer.stop()\n'
         '    howdyRetryTimer.stop()\n'
-        '    if (passwordPam.active) passwordPam.abort()\n'
-        '    if (fingerprintPam.active) fingerprintPam.abort()\n'
         '    if (howdyPam.active) howdyPam.abort()\n'
-        '  }\n'
+        '    abortFido2()\n'
     ),
     (
         '  function handleFingerprintFinished(result) {\n'
@@ -178,17 +177,14 @@ PATCHES = [
         '  }\n'
     ),
     (
-        '        pendingSessionLockTimer.stop()\n'
+        # WlSessionLock onSecureStateChanged.
         '        root.startFingerprint()\n'
-        '      }\n'
-        '    }\n',
-        '        pendingSessionLockTimer.stop()\n'
+        '        if (root.faceStart === "always") root.startFace()\n',
         '        root.startFingerprint()\n'
         '        root.howdyLastActivityAt = Date.now()\n'
         '        root.howdyRetryPaused = false\n'
         '        root.startHowdy()\n'
-        '      }\n'
-        '    }\n'
+        '        if (root.faceStart === "always") root.startFace()\n'
     ),
     (
         '      root.fingerprintConfigured = String(fingerprintCheckStdout.text || "").trim() === "yes"\n'
@@ -229,34 +225,21 @@ PATCHES = [
 
     # ---- Explorer-specific anchors (stock anchor does not match here) ---
     (
-        '    Qt.callLater(function() {\n'
-        '      root.refreshBackground()\n'
-        '      root.refreshFingerprintStatus()\n'
-        '      root.refreshSessionLockXray()\n'
-        '      root.rescanUserDesigns()\n'
-        '      // The frame is ready before the unlock needs it.\n'
-        '      if (root.designHasClip) root.prepareClipWallpaper(root.designClipPath)\n'
-        '      else if (root.stingPath.length > 0) root.prepareClipWallpaper(root.stingPath)\n'
-        '    })\n',
-        '    Qt.callLater(function() {\n'
-        '      root.refreshBackground()\n'
-        '      root.refreshFingerprintStatus()\n'
+        # beginLock()'s Qt.callLater(...) block.
+        '      root.refreshFaceStatus()\n'
+        '      root.refreshFido2Status()\n'
+        '      root.refreshKeyboardLayout()\n',
+        '      root.refreshFaceStatus()\n'
         '      root.refreshHowdyStatus()\n'
-        '      root.refreshSessionLockXray()\n'
-        '      root.rescanUserDesigns()\n'
-        '      // The frame is ready before the unlock needs it.\n'
-        '      if (root.designHasClip) root.prepareClipWallpaper(root.designClipPath)\n'
-        '      else if (root.stingPath.length > 0) root.prepareClipWallpaper(root.stingPath)\n'
-        '    })\n'
+        '      root.refreshFido2Status()\n'
+        '      root.refreshKeyboardLayout()\n'
     ),
     (
-        '  function runWake() {\n'
-        '    screenBlanked = false\n'
+        # runWake()'s tail -- Explorer 1.9 adds face/FIDO2 wake handling and
+        # an input failsafe above it.
         '    if (!wakeProcess.running) wakeProcess.running = true\n'
         '    if (lockRequested) armBlankTimer()\n'
         '  }\n',
-        '  function runWake() {\n'
-        '    screenBlanked = false\n'
         '    if (!wakeProcess.running) wakeProcess.running = true\n'
         '    if (lockRequested) armBlankTimer()\n'
         '\n'
@@ -335,35 +318,23 @@ PATCHES = [
         '  }\n'
     ),
     (
-        '  Component.onCompleted: {\n'
-        '    refreshBackground()\n'
-        '    refreshFingerprintStatus()\n'
-        '    refreshSessionLockXray()\n'
-        '    rescanUserDesigns()\n'
-        '    detectAvatar()\n'
-        '    checkStrandedLock()\n'
-        '  }\n',
-        '  Component.onCompleted: {\n'
-        '    refreshBackground()\n'
-        '    refreshFingerprintStatus()\n'
+        # Component.onCompleted.
+        '    refreshFaceStatus()\n'
+        '    refreshFido2Status()\n'
+        '    refreshSessionLockXray()\n',
+        '    refreshFaceStatus()\n'
         '    refreshHowdyStatus()\n'
+        '    refreshFido2Status()\n'
         '    refreshSessionLockXray()\n'
-        '    rescanUserDesigns()\n'
-        '    detectAvatar()\n'
-        '    checkStrandedLock()\n'
-        '  }\n'
     ),
     (
-        '        passwordPam: root.passwordPamConfigured,\n'
-        '        multimedia: root.multimediaAvailable,\n'
+        # IPC status() object literal.
         '        fingerprint: root.fingerprintConfigured,\n'
-        '        authenticating: root.authenticating,\n',
-        '        passwordPam: root.passwordPamConfigured,\n'
-        '        multimedia: root.multimediaAvailable,\n'
+        '        fingerprintConfigured: root.fingerprintConfigured,\n',
         '        fingerprint: root.fingerprintConfigured,\n'
+        '        fingerprintConfigured: root.fingerprintConfigured,\n'
         '        howdy: root.howdyConfigured,\n'
         '        howdyPaused: root.howdyRetryPaused,\n'
-        '        authenticating: root.authenticating,\n'
     ),
     (
         '    function preview(): string {\n'
