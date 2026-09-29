@@ -1,0 +1,132 @@
+#!/bin/bash
+# howdy-sudo-adapter — optionally wire Howdy face auth into sudo and polkit.
+#
+# Face unlock is a convenience for someone sitting at the machine, so it only
+# belongs in front of an interactive prompt -- never a scripted or unattended
+# one. Two things make that safe here:
+#
+#   * pam_unix is kept first with try_first_pass, so a typed password still
+#     authenticates and only an empty Enter falls through to a face scan.
+#     A script that pipes a password is unaffected.
+#   * howdy itself aborts where a scan makes no sense: abort_if_ssh = true
+#     (no camera for a remote session) and abort_if_lid_closed = true (camera
+#     physically covered). These are howdy's own settings.
+#
+# Every change is marker-tagged and reversible: `remove` deletes only the exact
+# lines carrying/added by this tool, matched by content, and restores the stock
+# polkit service if we created an override that is otherwise stock-identical.
+#
+# Usage: howdy-sudo-adapter install|remove
+set -euo pipefail
+
+ACTION="${1:-install}"
+
+# The three lines we add. The marker is used both to locate our block and as a
+# guard: nothing is removed unless it is present.
+MARKER="# managed by Howdy Face Unlock (io.github.tslove923.howdy-face-unlock)"
+LINE_UNIX="auth       [success=1 default=ignore] pam_unix.so try_first_pass nullok"
+LINE_HOWDY="auth       sufficient                  pam_howdy.so"
+
+SUDO_PAM="/etc/pam.d/sudo"
+POLKIT_ETC="/etc/pam.d/polkit-1"
+POLKIT_STOCK="/usr/lib/pam.d/polkit-1"
+
+sudo_n() { sudo -n "$@"; }
+
+# Insert our three lines right after the #%PAM-1.0 header (or at the top when
+# there is no header), preserving the order pam_unix -> pam_howdy -> marker.
+insert_block() {
+  local file=$1 after=$2
+  local -a lines=("$LINE_UNIX" "$LINE_HOWDY" "$MARKER")
+  local i
+  for (( i=${#lines[@]}-1; i>=0; i-- )); do
+    if [[ $after == "header" ]]; then
+      sudo_n sed -i "1a${lines[$i]}" "$file"
+    else
+      sudo_n sed -i "1i${lines[$i]}" "$file"
+    fi
+  done
+}
+
+install_one() {
+  local file=$1
+  if sudo_n grep -qF "$MARKER" "$file" 2>/dev/null; then
+    echo "  already wired: $file"
+    return 0
+  fi
+  if sudo_n head -1 "$file" | grep -q '^#%PAM'; then
+    insert_block "$file" header
+  else
+    insert_block "$file" top
+  fi
+  echo "  wired: $file"
+}
+
+remove_one() {
+  local file=$1
+  if ! sudo_n grep -qF "$MARKER" "$file" 2>/dev/null; then
+    return 0
+  fi
+  # Remove exactly our three lines, matched by full content (position
+  # independent). Guarded by the marker check above, so it only ever runs on a
+  # file this tool modified.
+  sudo_n python3 - "$file" "$MARKER" "$LINE_UNIX" "$LINE_HOWDY" <<'PYEOF'
+import sys
+path, marker, line_unix, line_howdy = sys.argv[1:5]
+ours = {marker, line_unix, line_howdy}
+with open(path) as f:
+    kept = [ln for ln in f if ln.rstrip("\n") not in ours]
+with open(path, "w") as f:
+    f.writelines(kept)
+PYEOF
+  echo "  unwired: $file"
+}
+
+case "$ACTION" in
+  install)
+    echo "Wiring face auth into sudo and polkit..."
+
+    install_one "$SUDO_PAM"
+
+    # polkit's stock service lives in /usr/lib/pam.d/; an /etc/pam.d override
+    # takes precedence. Recreate it, then include the original stack so a
+    # non-face match still falls back exactly as before.
+    if [[ ! -f $POLKIT_ETC ]]; then
+      if [[ -f $POLKIT_STOCK ]]; then
+        sudo_n cp -a "$POLKIT_STOCK" "$POLKIT_ETC"
+      else
+        sudo_n tee "$POLKIT_ETC" >/dev/null <<'EOF'
+#%PAM-1.0
+auth       include      system-auth
+account    include      system-auth
+password   include      system-auth
+session    include      system-auth
+EOF
+      fi
+    fi
+    install_one "$POLKIT_ETC"
+
+    echo "Face unlock is now offered for sudo and polkit prompts."
+    echo "(Type a password as usual; press Enter on an empty prompt to use your face.)"
+    ;;
+
+  remove)
+    echo "Unwiring face auth from sudo and polkit..."
+    remove_one "$SUDO_PAM"
+    if sudo_n grep -qF "$MARKER" "$POLKIT_ETC" 2>/dev/null; then
+      remove_one "$POLKIT_ETC"
+      # If the override is now identical to the packaged file, drop it so the
+      # packaged one applies again.
+      if [[ -f $POLKIT_STOCK ]] && sudo_n diff -q "$POLKIT_STOCK" "$POLKIT_ETC" >/dev/null 2>&1; then
+        sudo_n rm -f "$POLKIT_ETC"
+        echo "  removed override $POLKIT_ETC (now matches stock)"
+      fi
+    fi
+    echo "Done."
+    ;;
+
+  *)
+    echo "Usage: $0 install|remove" >&2
+    exit 2
+    ;;
+esac

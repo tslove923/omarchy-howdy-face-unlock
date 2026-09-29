@@ -143,6 +143,13 @@ stock `lock/Service.qml` is.
   same way it already trusts nothing it can't verify for fingerprint/PAM.
   Session code able to rewrite any of those could otherwise enroll a face
   everyone matches or swap in an auth module that always succeeds.
+- Optional (asked during setup, default yes): face auth for **sudo and
+  polkit**. `pam_unix` stays first with `try_first_pass`, so a typed password
+  authenticates exactly as before and only an *empty* Enter falls through to a
+  face scan; howdy itself declines over SSH and when the lid is closed. Undone
+  by `remove`. Note: this is inert where the user has blanket `NOPASSWD` in
+  sudoers (sudo never prompts, so PAM is never consulted) -- polkit still
+  applies, since GUI auth prompts for a password regardless.
 - Optional (asked during setup): a facelock-shaped compatibility surface so
   [Lock Screen Explorer](https://github.com/SirJul1337/omarchy-lock-explorer)'s
   own face UI runs Howdy — see
@@ -155,11 +162,17 @@ stock `lock/Service.qml` is.
   every camera — some just work under plain capture, and the tool's own
   "already working" pre-check exits non-zero for that. `setup` treats this as
   informational, not fatal.
-- Omarchy is actively deciding between Howdy and other face-auth backends
-  (see [basecamp/omarchy#5212](https://github.com/basecamp/omarchy/pull/5212)
-  and [discussion #4982](https://github.com/basecamp/omarchy/discussions/4982)).
-  This plugin exists so face unlock works today, independent of how that
-  settles upstream.
+- Omarchy does not ship face unlock yet. An earlier Howdy PR
+  ([#5212](https://github.com/basecamp/omarchy/pull/5212)) was closed as a
+  duplicate; the current open one is
+  [**omacom/omarchy#8336**](https://github.com/omacom/omarchy/pull/8336)
+  ("Add face authentication (howdy) to the lock screen"). It takes a similar
+  approach to the stock-lock half of this plugin -- the same
+  `omarchy-lock-face` PAM service -- but patches Omarchy core rather than
+  shipping as a plugin. This project is tracking #8336: if it merges, the
+  stock-lock patch here becomes redundant, but the Lock Screen Explorer shim
+  would still be needed, since #8336 only covers the stock lock screen. Until
+  then, this plugin is how you get face unlock today.
 
 ## Lock-screen replacement plugins (Lock Screen Explorer)
 

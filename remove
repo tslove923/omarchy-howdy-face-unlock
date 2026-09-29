@@ -15,6 +15,9 @@ LOCK_QML_ORIG="$LOCK_QML.orig"
 echo "Removing the facelock-shaped lock-screen surface..."
 sudo -n bash "$root/bin/howdy-lock-face-adapter" remove || true
 
+echo "Unwiring face unlock from sudo and polkit..."
+sudo -n bash "$root/bin/howdy-sudo-adapter" remove || true
+
 echo "Removing Howdy packages..."
 omarchy-pkg-drop howdy-git linux-enable-ir-emitter python-dlib
 

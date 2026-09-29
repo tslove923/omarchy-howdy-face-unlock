@@ -276,6 +276,36 @@ else
   echo "Skipping Lock Screen Explorer compatibility."
 fi
 
+# ---- Optional: face unlock for sudo and polkit ----------------------------
+#
+# Face unlock is a convenience for the person sitting at the machine, so this
+# only ever sits in front of an interactive prompt: pam_unix is kept first with
+# try_first_pass (a typed password authenticates as before; only an empty Enter
+# triggers a scan), and howdy itself aborts for SSH sessions and when the lid
+# is closed. It changes how root escalation authenticates, so it is opt-in --
+# but defaulting to yes, since a laptop with an IR camera is exactly the case
+# it is for. See bin/howdy-sudo-adapter.
+sudo_wanted=no
+if [[ -d /etc/howdy ]]; then
+  echo
+  echo "Wire face unlock into sudo and polkit as well? A typed password still"
+  echo "works; face is only tried when you press Enter on an empty prompt."
+  read -r -p "Wire face unlock into sudo and polkit? [Y/n] " reply || true
+  case "${reply:-}" in [nN]|[nN][oO]) sudo_wanted=no ;; *) sudo_wanted=yes ;; esac
+fi
+
+if [[ $sudo_wanted == yes ]]; then
+  echo "Wiring face unlock into sudo and polkit..."
+  if sudo -n bash "$root/bin/howdy-sudo-adapter" install; then
+    :
+  else
+    echo -e "\e[33mCouldn't wire face unlock into sudo/polkit -- continuing. The lock\e[0m"
+    echo -e "\e[33mscreen is unaffected; sudo and polkit just keep using your password.\e[0m"
+  fi
+else
+  echo "Skipping sudo/polkit face unlock."
+fi
+
 # Note which lock screen Howdy will actually back right now -- Omarchy loads
 # only one `lock`-targeting service at a time.
 if command -v omarchy >/dev/null 2>&1; then
