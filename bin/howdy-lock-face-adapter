@@ -1,0 +1,125 @@
+#!/bin/bash
+# howdy-lock-face-adapter — provide the facelock-shaped face-unlock surface
+# that lock-screen plugins with a facelock-shaped integration expect
+# (notably Lock Screen Explorer, io.github.sirjul1337.lock-explorer), but
+# backed by Howdy.
+#
+# Why this exists: Lock Screen Explorer hardcodes
+#   PamContext { config: "omarchy-lock-face" }
+# and only offers its face UI when its own check-face-auth.sh finds a
+# facelock-shaped backend: /etc/pam.d/omarchy-lock-face referencing
+# pam_facelock.so, the module /usr/lib/security/pam_facelock.so, and a
+# model under /var/lib/facelock/models/*.onnx. There is no plugin-to-plugin
+# auth hook in Omarchy, and Explorer reads none of these from user config,
+# so the only zero-touch way to run Howdy behind Explorer's face UI is to
+# provide that surface ourselves -- without modifying a single file inside
+# Explorer's tree, so this works regardless of install order and survives
+# Explorer updating itself.
+#
+# This is a compatibility facade, deliberately labelled as such: the
+# pam_facelock.so name and the /var/lib/facelock path are Explorer's
+# (facelock's) vocabulary, but everything they point at is Howdy. Nothing
+# here pretends facelock is installed to any other consumer; it exists so
+# Explorer's own detector and PAM context resolve to Howdy.
+#
+# Idempotent. Two modes:
+#   install   create the adapter (skips if a real facelock is present)
+#   remove    undo exactly what install created, restoring any backup
+#
+# Never touches Explorer's directory. Owns only:
+#   /etc/pam.d/omarchy-lock-face
+#   /usr/lib/security/pam_facelock.so
+#   /var/lib/facelock/models/            (created only if absent)
+#
+# Usage: howdy-lock-face-adapter install|remove
+set -euo pipefail
+
+ACTION="${1:-install}"
+
+PAM_FACE="/etc/pam.d/omarchy-lock-face"
+PAM_HOWDY="/etc/pam.d/omarchy-lock-howdy"
+MODULE_ALIAS="/usr/lib/security/pam_facelock.so"
+MODULE_REAL="/usr/lib/security/pam_howdy.so"
+FACELOCK_LIB="/var/lib/facelock"
+FACELOCK_MODELS="$FACELOCK_LIB/models"
+HOWDY_MODELS="/etc/howdy/models"
+MARKER="# managed by Howdy Face Unlock (io.github.tslove923.howdy-face-unlock)"
+
+sudo_n() { sudo -n "$@"; }
+
+# A real facelock install: its own daemon and PAM module, not our symlink.
+real_facelock_present() {
+  # Our own symlink is not "real".
+  if [[ -L $MODULE_ALIAS && "$(readlink "$MODULE_ALIAS")" == "pam_howdy.so" ]]; then
+    return 1
+  fi
+  [[ -f $MODULE_ALIAS ]] || command -v facelock >/dev/null 2>&1
+}
+
+case "$ACTION" in
+  install)
+    if real_facelock_present; then
+      echo "A real facelock install was found -- leaving it alone (Howdy will not"
+      echo "shadow it). Explorer's face UI will use facelock, not Howdy."
+      exit 0
+    fi
+
+    # 1. The PAM service Explorer hardcodes. Uses the facelock-named alias so
+    #    Explorer's grep passes; the alias resolves to the real Howdy module.
+    sudo_n tee "$PAM_FACE" >/dev/null <<EOF
+#%PAM-1.0
+$MARKER
+# The pam_facelock.so below is a symlink to pam_howdy.so, so lock-screen
+# plugins that look for a facelock-shaped face backend run Howdy behind them.
+auth       sufficient                  pam_facelock.so
+account    include                     system-local-login
+EOF
+    sudo_n chmod 644 "$PAM_FACE"
+
+    # 2. The module alias Explorer requires by filename.
+    sudo_n ln -sf pam_howdy.so "$MODULE_ALIAS"
+
+    # 3. A models dir Explorer globs for *.onnx, mirroring Howdy's models.
+    sudo_n mkdir -p "$FACELOCK_MODELS"
+    for m in "$HOWDY_MODELS"/*.dat; do
+      [[ -e $m ]] || continue
+      b=$(basename "$m" .dat)
+      sudo_n ln -sf "$m" "$FACELOCK_MODELS/$b.onnx"
+    done
+
+    echo "Howdy lock-screen adapter installed (facelock-shaped surface -> Howdy)."
+    ;;
+
+  remove)
+    # Only remove what is ours: our marker in the PAM file, our symlinks.
+    if [[ -f $PAM_FACE ]] && sudo_n grep -qF "$MARKER" "$PAM_FACE"; then
+      sudo_n rm -f "$PAM_FACE"
+      echo "Removed $PAM_FACE"
+    fi
+    if [[ -L $MODULE_ALIAS && "$(readlink "$MODULE_ALIAS")" == "pam_howdy.so" ]]; then
+      sudo_n rm -f "$MODULE_ALIAS"
+      echo "Removed $MODULE_ALIAS"
+    fi
+    if [[ -d $FACELOCK_MODELS ]]; then
+      for f in "$FACELOCK_MODELS"/*.onnx; do
+        [[ -L $f ]] || continue
+        tgt=$(readlink "$f")
+        case "$tgt" in
+          "$HOWDY_MODELS"/*) sudo_n rm -f "$f" ;;
+        esac
+      done
+      # Remove the dir tree only if we emptied it and it is otherwise empty.
+      if [[ -z "$(sudo_n ls -A "$FACELOCK_MODELS" 2>/dev/null)" ]]; then
+        sudo_n rmdir "$FACELOCK_MODELS" 2>/dev/null || true
+        sudo_n rmdir "$FACELOCK_LIB" 2>/dev/null || true
+      fi
+      echo "Removed Howdy model mirrors under $FACELOCK_MODELS"
+    fi
+    echo "Howdy lock-screen adapter removed."
+    ;;
+
+  *)
+    echo "Usage: $0 install|remove" >&2
+    exit 2
+    ;;
+esac

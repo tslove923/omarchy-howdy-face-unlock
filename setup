@@ -20,7 +20,7 @@ LOCK_QML_ORIG="$LOCK_QML.orig"
 # Expected sha256 of patch-lock-howdy.py at this commit. Root verifies the
 # staged copy against this fixed value before executing it (see the patch
 # step below) -- bump this alongside any change to that file.
-PATCHER_SHA256="d29d23ad2c29ca77b9244148aa5e60ae82e67b4e39149075a1ed60364e71e8fa"
+PATCHER_SHA256="6f161878ab91ca598e9578ad4a90782f82e384dfa841dfd1bf18227bb744eac8"
 
 # Sets/inserts key = value inside [section] of an ini file without disturbing
 # anything else in it -- howdy's config.ini is heavily commented, and a
@@ -215,24 +215,70 @@ fi
 # docstring). When that happens, the rest of Howdy's install (packages,
 # camera, enrollment, the stock lock patch, the auto-repair hook) should
 # still succeed -- Explorer compatibility is a bonus, not a precondition.
-EXPLORER_QML="$HOME/.config/omarchy/plugins/io.github.sirjul1337.lock-explorer/Service.qml"
-EXPLORER_QML_ORIG="$EXPLORER_QML.orig"
-if [[ -f $EXPLORER_QML ]] && ! grep -q 'omarchy-lock-howdy' "$EXPLORER_QML"; then
-  echo "Lock Screen Explorer detected -- patching its lock screen for Howdy too..."
-  [[ -f $EXPLORER_QML_ORIG ]] || cp -a "$EXPLORER_QML" "$EXPLORER_QML_ORIG"
-  if python3 "$root/patch-lock-howdy-explorer.py" "$EXPLORER_QML"; then
-    echo "Patched Lock Screen Explorer's lock screen for Howdy."
-  else
-    echo -e "\e[33mCouldn't patch Lock Screen Explorer's Service.qml (its structure may have\e[0m"
-    echo -e "\e[33mchanged upstream) -- continuing without Explorer support. Howdy still works\e[0m"
-    echo -e "\e[33mwith the stock lock screen. See this plugin's README for details.\e[0m"
-  fi
+# ---- Optional: Lock Screen Explorer compatibility -------------------------
+#
+# Lock Screen Explorer (io.github.sirjul1337.lock-explorer) ships its own
+# native face-unlock UI, but it can only drive a facelock-shaped backend: it
+# hardcodes PamContext config "omarchy-lock-face" and only offers the face UI
+# when its own check-face-auth.sh finds pam_facelock.so, /var/lib/facelock
+# models, and so on. Omarchy has no plugin-to-plugin auth hook and none of
+# that is user-configurable, so running Howdy behind Explorer's face UI means
+# providing that facelock-shaped surface ourselves -- backed by Howdy.
+#
+# We do this WITHOUT touching any file inside Explorer's tree, so it is
+# install-order independent (it does not matter whether Explorer is present
+# yet) and survives `omarchy plugin update`, which would revert a patched
+# Service.qml. The files this creates are:
+#
+#   /etc/pam.d/omarchy-lock-face      -- the PAM service Explorer calls
+#   /usr/lib/security/pam_facelock.so -- symlink to pam_howdy.so
+#   /var/lib/facelock/models/*.onnx   -- symlinks to your Howdy models
+#
+# In other words: it makes Explorer's "facelock" face path resolve to Howdy.
+# The facelock names are Explorer's vocabulary; everything they point at is
+# Howdy. Nothing here claims facelock is installed to anything but Explorer's
+# own detector, and a real facelock install (its module/daemon) is never
+# shadowed -- this step backs off if it finds one.
+#
+# This is opt-in: it writes files outside the plugin's own directory, so we
+# ask first. Skipping it changes nothing for the stock lock screen, which is
+# patched above regardless.
+adapter_wanted=no
+if [[ -f $HOME/.config/omarchy/plugins/io.github.sirjul1337.lock-explorer/manifest.json ]]; then
+  echo
+  echo "Lock Screen Explorer is installed. To use Howdy as its face backend, this"
+  echo "plugin can provide a small facelock-shaped compatibility surface (it writes:"
+  echo "  /etc/pam.d/omarchy-lock-face, a pam_facelock.so -> pam_howdy.so symlink,"
+  echo "  and /var/lib/facelock/models symlinks). Nothing in Explorer's own files"
+  echo "is modified. A real facelock install is left alone."
+  read -r -p "Set up Lock Screen Explorer compatibility? [y/N] " reply || true
+  case "${reply:-}" in [yY]|[yY][eE][sS]) adapter_wanted=yes ;; esac
+else
+  # Not installed yet -- still offer it, so the surface is ready if Explorer is
+  # added later (this is what makes the step install-order independent).
+  echo
+  echo "Lock Screen Explorer is not installed. You can still pre-provision the"
+  echo "facelock-shaped surface now so Howdy backs Explorer's face UI the moment"
+  echo "you add it later. It only creates files outside Explorer's tree."
+  read -r -p "Pre-provision Lock Screen Explorer compatibility? [y/N] " reply || true
+  case "${reply:-}" in [yY]|[yY][eE][sS]) adapter_wanted=yes ;; esac
 fi
 
-# Tell the user which of the two patched files is actually live right now
-# -- Omarchy only loads one `lock`-targeting service at a time, so whichever
-# one isn't currently enabled is patched-but-dormant until they switch.
-if [[ -f $EXPLORER_QML ]] && command -v omarchy >/dev/null 2>&1; then
+if [[ $adapter_wanted == yes ]]; then
+  echo "Providing the facelock-shaped lock-screen surface (for Lock Screen Explorer)..."
+  if sudo -n bash "$root/bin/howdy-lock-face-adapter" install; then
+    :
+  else
+    echo -e "\e[33mCouldn't install the Howdy lock-screen adapter -- continuing without\e[0m"
+    echo -e "\e[33mExplorer support. Howdy still works with the stock lock screen.\e[0m"
+  fi
+else
+  echo "Skipping Lock Screen Explorer compatibility."
+fi
+
+# Note which lock screen Howdy will actually back right now -- Omarchy loads
+# only one `lock`-targeting service at a time.
+if command -v omarchy >/dev/null 2>&1; then
   explorer_active=$(omarchy plugin list --json 2>/dev/null | python3 -c '
 import json, sys
 try:
@@ -242,10 +288,10 @@ except Exception:
 print("yes" if any(p.get("id") == "io.github.sirjul1337.lock-explorer" and p.get("enabled") for p in plugins) else "no")
 ' 2>/dev/null)
   if [[ $explorer_active == yes ]]; then
-    echo -e "\e[33mNote: Lock Screen Explorer is currently enabled, so it -- not the stock\e[0m"
-    echo -e "\e[33mlock screen -- is what actually runs when you lock. Howdy's patch to\e[0m"
-    echo -e "\e[33mExplorer's own Service.qml (above) is what's live; the stock patch is\e[0m"
-    echo -e "\e[33mdormant until you disable Explorer.\e[0m"
+    echo -e "\e[33mNote: Lock Screen Explorer is enabled, so it -- not the stock lock\e[0m"
+    echo -e "\e[33mscreen -- is what runs when you lock. The facelock-shaped surface\e[0m"
+    echo -e "\e[33m(if you accepted it above) is what backs its face UI, with Howdy\e[0m"
+    echo -e "\e[33munderneath; the stock patch is dormant until you disable Explorer.\e[0m"
   fi
 fi
 
@@ -271,11 +317,7 @@ echo "A post-update hook now re-patches it automatically on every update; if"
 echo "that ever can't complete (e.g. sudo isn't authenticated at that point),"
 echo "this plugin's own Service.qml watchdog will notice and notify you to"
 echo "rerun this script by hand: $root/setup"
-if [[ -f $EXPLORER_QML ]] && grep -q 'omarchy-lock-howdy' "$EXPLORER_QML"; then
-  echo
-  echo "Lock Screen Explorer's own Service.qml was patched too. There is no"
-  echo "'omarchy plugin update' hook to catch that plugin's own updates"
-  echo "reverting it (Omarchy has no post-plugin-update hook point today) --"
-  echo "this plugin's watchdog will still notice and tell you to rerun this"
-  echo "script if that happens."
-fi
+echo
+echo "Lock Screen Explorer support is provided via a facelock-shaped surface"
+echo "(Howdy behind it), written outside Explorer's tree -- so an Explorer"
+echo "update can't revert it, and no repair hook is needed for it."

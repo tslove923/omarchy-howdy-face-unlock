@@ -25,7 +25,7 @@ PATCHER="$PLUGIN_DIR/patch-lock-howdy.py"
 # Root verifies the staged copy against this before executing it, so the
 # sudo session warm from omarchy-update's own pacman prompt can't be made to
 # run whatever happens to be sitting in this user-writable plugin checkout.
-PATCHER_SHA256="d29d23ad2c29ca77b9244148aa5e60ae82e67b4e39149075a1ed60364e71e8fa"
+PATCHER_SHA256="6f161878ab91ca598e9578ad4a90782f82e384dfa841dfd1bf18227bb744eac8"
 
 if [[ -f $LOCK_QML ]] && ! grep -q 'omarchy-lock-howdy' "$LOCK_QML"; then
   echo "Howdy Face Unlock: re-patching lock screen after update..."
@@ -71,32 +71,24 @@ if [[ -f $LOCK_QML ]] && ! grep -q 'omarchy-lock-howdy' "$LOCK_QML"; then
   fi
 fi
 
-# ------------------------------------------------------- lock explorer ---
+# ------------------------------------------------- lock screen explorer ---
 
-# Lock Screen Explorer (io.github.sirjul1337.lock-explorer) keeps its own
-# Service.qml in the user's plugin checkout, independent of the stock file
-# above -- see patch-lock-howdy-explorer.py and setup for the full design
-# rationale. `omarchy update` doesn't touch that checkout (it's pulled by
-# `omarchy plugin update`, a separate command with no hook point of its
-# own today), so this mainly re-catches drift from something else having
-# reset it -- a manual git reset, a corrupted checkout, etc. It's a cheap
-# extra safety net on every `omarchy update` run, not the primary repair
-# path for that plugin's own updates; this plugin's Service.qml watchdog
-# is what catches those (see setup's closing note).
-EXPLORER_QML="$HOME/.config/omarchy/plugins/io.github.sirjul1337.lock-explorer/Service.qml"
-if [[ -f $EXPLORER_QML ]] && ! grep -q 'omarchy-lock-howdy' "$EXPLORER_QML"; then
-  echo "Howdy Face Unlock: re-patching Lock Screen Explorer after update..."
-  # No root, no hash-check dance: this file is already owned by the
-  # invoking user (same as the rest of their plugin checkouts), so running
-  # the patcher against it doesn't cross a privilege boundary the way the
-  # stock, package-owned file above does -- see setup's comment on this
-  # same point for the full reasoning.
-  if python3 "$PLUGIN_DIR/patch-lock-howdy-explorer.py" "$EXPLORER_QML"; then
-    echo "Howdy Face Unlock: Lock Screen Explorer's lock screen re-patched."
-  else
-    echo "Howdy Face Unlock: Explorer repair failed (its structure may have changed" >&2
-    echo "upstream); rerun $PLUGIN_DIR/setup or see this plugin's README." >&2
-  fi
+# Lock Screen Explorer compatibility is provided by a facelock-shaped surface
+# (see bin/howdy-lock-face-adapter), NOT by patching Explorer's own files --
+# so unlike the stock patch above, an Explorer update cannot revert it and
+# there is nothing here to re-apply on Explorer's behalf. The only thing that
+# can drift is the set of Howdy model mirrors we expose under
+# /var/lib/facelock/models (e.g. the user enrolled another face), or the
+# adapter being removed by hand. Re-running install is idempotent and only
+# acts when the adapter was previously set up (marker present, or the models
+# dir exists), and it backs off entirely if a real facelock is installed.
+ADAPTER="$PLUGIN_DIR/bin/howdy-lock-face-adapter"
+if [[ -f $ADAPTER ]] \
+   && { sudo -n grep -qF "# managed by Howdy Face Unlock" /etc/pam.d/omarchy-lock-face 2>/dev/null \
+        || [[ -d /var/lib/facelock/models ]]; }; then
+  echo "Howdy Face Unlock: refreshing the facelock-shaped lock-screen surface..."
+  sudo -n bash "$ADAPTER" install || \
+    echo "Howdy Face Unlock: adapter refresh failed; rerun $PLUGIN_DIR/setup" >&2
 fi
 
 exit 0

@@ -84,17 +84,13 @@ regardless of timing. Bump the pinned hash in both `setup` and
 `hooks/post-update.d/repair-howdy-lock.hook` if you ever modify
 `patch-lock-howdy.py`.
 
-`patch-lock-howdy-explorer.py` (Lock Screen Explorer's own `Service.qml`,
-see below) skips all of this and runs directly as the invoking user, with
-no scratch dir, no hash pin, no `sudo`. That's deliberate, not an
-oversight: its target file lives in the user's own plugin checkout, not a
-package-owned path — the invoking user already owns it outright, so
-patching it doesn't cross a privilege boundary the way writing to
-`/usr/share/omarchy` does. The scratch-dir-plus-hash dance defends against
-a warm `sudo` timestamp being used to run tampered bytes as root; with no
-privilege escalation involved, anyone able to tamper with that patcher
-could equally tamper with anything else the user's own shell already
-trusts, so the same ceremony there wouldn't buy anything real.
+Lock Screen Explorer support (see below) does not patch any file, so the
+hash pin above applies only to `patch-lock-howdy.py`. It writes its own
+PAM service, module symlink, and model symlinks directly (via
+`bin/howdy-lock-face-adapter`), all as root-owned system paths it creates
+itself rather than as a patch to someone else's package-owned file — so
+there is no third-party file whose bytes root has to trust the way the
+stock `lock/Service.qml` is.
 
 ## What setup actually changes
 
@@ -132,11 +128,11 @@ trusts, so the same ceremony there wouldn't buy anything real.
   same way it already trusts nothing it can't verify for fingerprint/PAM.
   Session code able to rewrite any of those could otherwise enroll a face
   everyone matches or swap in an auth module that always succeeds.
-- If [Lock Screen Explorer](https://github.com/SirJul1337/omarchy-lock-explorer)
-  is installed, its own `Service.qml` gets the same treatment via a second
-  patcher tuned to its structure — see
+- Optional (asked during setup): a facelock-shaped compatibility surface so
+  [Lock Screen Explorer](https://github.com/SirJul1337/omarchy-lock-explorer)'s
+  own face UI runs Howdy — see
   [Lock-screen replacement plugins](#lock-screen-replacement-plugins-lock-screen-explorer)
-  below.
+  below. Nothing inside Explorer's own files is modified.
 
 ## Known rough edges
 
@@ -157,45 +153,63 @@ Plugins that replace the lock screen entirely declare
 makes Omarchy disable the stock `omarchy.lock` service and load the
 replacement's own `Service.qml` for the `lock` IPC target instead — Omarchy
 only ever loads one `lock`-targeting service at a time, so whichever one
-isn't currently enabled is dormant, patched or not.
+isn't currently enabled is dormant.
 
 [Lock Screen Explorer](https://github.com/SirJul1337/omarchy-lock-explorer)
-(`io.github.sirjul1337.lock-explorer`) is one such plugin, and this project
-now ships a second patcher, `patch-lock-howdy-explorer.py`, tuned to its
-actual `Service.qml` structure (it's a large, single-file service with its
-own avatar detection, clip-design wallpaper prep, boot-screen/Plymouth
-integration, and a design/skin picker — the skins themselves are pure
-display components with no auth logic of their own, so one patch target is
-enough). `setup` runs it automatically, in addition to the stock patch,
-whenever it finds Lock Screen Explorer installed at
-`~/.config/omarchy/plugins/io.github.sirjul1337.lock-explorer/` —
-regardless of which of the two is currently *enabled*, so Howdy is already
-wired in however and whenever you switch between them. The post-update
-hook and this plugin's own Service.qml watchdog both know how to check
-whichever of the two files is actually active, the same way.
+(`io.github.sirjul1337.lock-explorer`) is one such plugin, and it ships its
+**own native face-unlock UI**. Unfortunately it can only drive a
+*facelock-shaped* backend, and none of that is configurable:
 
-A few things worth knowing about this support:
+- it hardcodes `PamContext { config: "omarchy-lock-face" }`, and
+- its `check-face-auth.sh` only offers the face UI when it finds
+  `pam_facelock.so` in `/etc/pam.d/omarchy-lock-face`, the module
+  `/usr/lib/security/pam_facelock.so`, and a model under
+  `/var/lib/facelock/models/*.onnx`.
 
-- **It's non-fatal.** Lock Screen Explorer is a fast-moving third-party
-  plugin outside this project's control, and its structure *will*
-  eventually drift out from under `patch-lock-howdy-explorer.py`'s anchors
-  (unlike the stock patch, which stays a hard failure — that's the
-  primary, stable target). When that happens, `setup` prints a clear
-  warning and continues with the rest of Howdy's install; it doesn't abort
-  just because a bonus, independently-versioned integration went stale.
-- **No automatic repair after `omarchy plugin update`.** That command (not
-  `omarchy update`) is what pulls a new version of Lock Screen Explorer,
-  and Omarchy has no post-plugin-update hook point today for this plugin
-  to catch that with. The post-update hook (`omarchy update`) still
-  opportunistically re-patches Explorer's file as a safety net, and this
-  plugin's own Service.qml watchdog will notice and tell you to rerun
-  `setup` by hand if a plugin update reverts it in between.
-- **Tested by static patch application and code reading, not by enabling
-  Lock Screen Explorer as the live lock screen.** The patch has been
-  applied to Lock Screen Explorer's actual installed `Service.qml`,
-  checked for idempotency (a second run no-ops) and brace/paren balance,
-  and read through line by line to confirm the Howdy path doesn't collide
-  with Explorer's own `authenticating` aggregate, its retry timers, or its
-  IPC `status()` fields. It has not been verified against the live,
-  enabled lock screen. If something doesn't work in practice, please open
-  an issue.
+Omarchy has no plugin-to-plugin auth hook, so the only way to run Howdy
+behind Explorer's face UI is to **provide that facelock-shaped surface
+ourselves — backed by Howdy**, entirely outside Explorer's tree:
+
+| file | purpose |
+| --- | --- |
+| `/etc/pam.d/omarchy-lock-face` | the PAM service Explorer calls; runs `pam_facelock.so` |
+| `/usr/lib/security/pam_facelock.so` | a symlink to `pam_howdy.so` |
+| `/var/lib/facelock/models/*.onnx` | symlinks to your Howdy face models |
+
+In other words: Explorer's "facelock" face path resolves to Howdy. The
+facelock names are Explorer's vocabulary; everything they point at is
+Howdy. Nothing here claims facelock is installed to anything but Explorer's
+own detector, and **a real facelock install is never shadowed** — the
+adapter backs off entirely if it finds one.
+
+This is implemented in `bin/howdy-lock-face-adapter` (`install` / `remove`)
+and is **opt-in**: `setup` asks before writing these files, explaining
+exactly what they are. Skipping it changes nothing for the stock lock
+screen, which is patched regardless.
+
+Why provide a surface instead of patching Explorer's `Service.qml` (the
+earlier approach, now removed): patching was fragile — Explorer's anchors
+drift on every release — and it injected a *second* face stack next to
+Explorer's own native one. Providing the surface instead is:
+
+- **install-order independent** — it doesn't matter whether Explorer is
+  installed before or after this plugin; if Explorer is added later it
+  finds the surface already in place, and if it's absent the surface is
+  simply inert;
+- **update-proof** — `omarchy plugin update` rewrites Explorer's files, but
+  none of ours live there, so there is nothing to revert;
+- **non-fatal** — if the adapter can't be installed, the rest of Howdy's
+  install still succeeds.
+
+`omarchy-shell howdy status` reports whether face unlock is healthy for
+whichever lock screen is actually live (the adapter surface when Explorer
+is enabled, the stock patch otherwise). A broken verdict is only trusted
+after it repeats across several spaced checks well after startup, so a
+transient misread — a still-starting shell, a plugin mid-reload — cannot
+raise a false alarm. The post-update hook refreshes the adapter after
+`omarchy update` if it was previously set up.
+
+**Backup note:** never keep a copy of a plugin directory *inside*
+`~/.config/omarchy/plugins/` (e.g. a `foo.bak-.../` sibling). The shell
+scans every subdirectory with a manifest, so a second copy carrying the
+same `id` can be the one it loads — which will silently serve stale code.

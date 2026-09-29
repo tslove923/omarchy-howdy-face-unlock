@@ -9,6 +9,27 @@ loudly here instead of silently corrupting it.
 """
 import sys
 
+
+class _MatchAny:
+    """Wrap a tuple of acceptable anchor strings.
+
+    Some upstream blocks drift incrementally (a line added here, a line
+    removed there) without changing what the surrounding patch needs to do.
+    An entry whose `old` is a _MatchAny will be applied against whichever of
+    its alternatives is present, so the patch survives that drift instead of
+    hard-failing. Exactly one alternative must match; zero is still a loud
+    failure (the file moved further than we know about), and more than one is
+    treated as a collision.
+    """
+
+    def __init__(self, alternatives):
+        self.alternatives = tuple(alternatives)
+
+
+def Match_ANY(alternatives):
+    return _MatchAny(alternatives)
+
+
 PATCHES = [
     (
         '  property bool fingerprintAuthenticating: false\n'
@@ -74,11 +95,26 @@ PATCHES = [
         '    })\n'
     ),
     (
+        # runWake() has two upstream shapes: an older two-line body, and a
+        # newer one that clears the display-blank state first. Match_ANY is a
+        # sentinel: its value is a tuple of acceptable anchors, and the first
+        # one present in the file is the one replaced. Everything after the
+        # anchor is the same for both, so the `new` text is written once.
+        Match_ANY((
+            '  function runWake() {\n'
+            '    root.displaysBlank = false\n'
+            '    root.monitorDpmsKnown = false\n'
+            '    if (!wakeProcess.running) wakeProcess.running = true\n'
+            '    if (lockRequested) armBlankTimer()\n'
+            '  }\n',
+            '  function runWake() {\n'
+            '    if (!wakeProcess.running) wakeProcess.running = true\n'
+            '    if (lockRequested) armBlankTimer()\n'
+            '  }\n',
+        )),
         '  function runWake() {\n'
-        '    if (!wakeProcess.running) wakeProcess.running = true\n'
-        '    if (lockRequested) armBlankTimer()\n'
-        '  }\n',
-        '  function runWake() {\n'
+        '    root.displaysBlank = false\n'
+        '    root.monitorDpmsKnown = false\n'
         '    if (!wakeProcess.running) wakeProcess.running = true\n'
         '    if (lockRequested) armBlankTimer()\n'
         '\n'
@@ -334,13 +370,26 @@ def main():
         return 0
 
     for old, new in PATCHES:
-        count = text.count(old)
-        if count == 0:
-            print(f"Patch target not found (upstream file changed?):\n{old!r}", file=sys.stderr)
-            return 1
-        if count > 1:
-            print(f"Patch target not unique ({count}x):\n{old!r}", file=sys.stderr)
-            return 1
+        if isinstance(old, _MatchAny):
+            matches = [alt for alt in old.alternatives if text.count(alt) == 1]
+            if not matches:
+                print(
+                    "Patch target not found (upstream file changed?); "
+                    "none of the accepted anchors matched exactly once:\n"
+                    + "\n---\n".join(repr(a) for a in old.alternatives),
+                    file=sys.stderr,
+                )
+                return 1
+            # Apply against the alternative that anchors the real text.
+            old = matches[0]
+        else:
+            count = text.count(old)
+            if count == 0:
+                print(f"Patch target not found (upstream file changed?):\n{old!r}", file=sys.stderr)
+                return 1
+            if count > 1:
+                print(f"Patch target not unique ({count}x):\n{old!r}", file=sys.stderr)
+                return 1
         text = text.replace(old, new, 1)
 
     with open(path, "w") as f:
