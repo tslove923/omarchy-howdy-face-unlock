@@ -8,9 +8,32 @@
 # alongside it. That's a reliable, driver-independent signature: it doesn't
 # depend on how any particular vendor names the device.
 #
+# The kernel renumbers the bare /dev/videoN nodes across reboots (and across
+# suspend/resume and USB re-enumeration), so a config that points at one can
+# break silently: howdy opens the wrong node and face auth just stops working
+# with no error. Prefer the stable /dev/v4l/by-id/ symlink for the same node;
+# it follows the device by its USB identity, not its enumeration order. Fall
+# back to the bare node only if no by-id symlink covers it.
+#
 # Needs v4l-utils; treat it as "no IR camera" if that isn't installed yet,
 # same as a probe that ran and simply found nothing.
 command -v v4l2-ctl >/dev/null 2>&1 || exit 1
+
+stable_path_for() {
+  # Given a resolved /dev/videoN, print the /dev/v4l/by-id/ symlink that
+  # points at it, if one exists; otherwise print the argument unchanged.
+  local target real link
+  target=$(readlink -f "$1")
+  for link in /dev/v4l/by-id/*; do
+    [[ -e $link ]] || continue
+    real=$(readlink -f "$link")
+    if [[ $real == "$target" ]]; then
+      echo "$link"
+      return 0
+    fi
+  done
+  echo "$1"
+}
 
 for dev in /dev/video*; do
   [[ -c $dev ]] || continue
@@ -19,7 +42,7 @@ for dev in /dev/video*; do
   [[ -z $formats ]] && continue
 
   if [[ $(wc -l <<<"$formats") -eq 1 && $formats == "GREY" ]]; then
-    echo "$dev"
+    stable_path_for "$dev"
     exit 0
   fi
 done

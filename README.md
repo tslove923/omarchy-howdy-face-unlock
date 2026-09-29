@@ -108,7 +108,10 @@ stock `lock/Service.qml` is.
 
 - Installs `howdy-git`, `linux-enable-ir-emitter`, `v4l-utils`, `python-dlib`
 - `/etc/howdy/config.ini` — tuned for IR (`dark_threshold`, `certainty`,
-  `max_height`), `workaround = off` (Howdy's default `input` workaround tries
+  `max_height`), pointed at the camera by its **stable `/dev/v4l/by-id/`
+  path** rather than a bare `/dev/videoN` (the kernel renumbers those across
+  reboots and USB re-enumeration, which would break face auth silently),
+  `workaround = off` (Howdy's default `input` workaround tries
   to fake an Enter keypress via `/dev/uinput` to unblock a legacy
   simultaneous-password-prompt flow this lock screen doesn't have — with a
   dedicated `PamContext` per auth method, it just hangs), and made
