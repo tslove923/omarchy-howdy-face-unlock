@@ -1,7 +1,19 @@
-# Howdy Face Unlock
+<h1 align="center">Howdy Face Unlock</h1>
 
-Face unlock for IR webcams on Omarchy, via [Howdy](https://github.com/boltgolt/howdy).
-Mirrors the fingerprint flow as closely as Omarchy's plugin system allows.
+<h3 align="center">Windows Hello–style unlocking for Omarchy — just look at the camera.</h3>
+
+<p align="center">
+  <a href="https://plugins.omarchy.org/plugin.html?id=io.github.tslove923.howdy-face-unlock">Omarchy Plugins</a>
+  ·
+  <a href="https://github.com/tslove923/omarchy-howdy-face-unlock/issues">Issues</a>
+</p>
+
+Face unlock for laptops with an infrared camera, built on
+[Howdy](https://github.com/boltgolt/howdy) and wired into the Omarchy lock
+screen. Open the lid, look up, and you're in — no password, no fingerprint
+pad. It mirrors the fingerprint flow as closely as Omarchy's plugin system
+allows: a dedicated PAM service, a face glyph where the fingerprint icon
+lives, and the same "already scanning when the lid comes up" feel.
 
 ## Install
 
