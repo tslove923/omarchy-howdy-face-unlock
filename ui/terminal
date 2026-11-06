@@ -1,0 +1,35 @@
+#!/bin/bash
+# Keep privileged/interactive Howdy commands in a visible terminal.
+set -e
+root=$(cd "$(dirname "$0")/.." && pwd)
+if [[ ${1:-} == run ]]; then
+  shift
+  set +e
+  case ${1:-} in
+    setup)
+      shift
+      "$root/setup" --no-enroll --camera "$1" ;;
+    enroll)
+      sudo howdy -U "$USER" -y add ;;
+    *) echo 'Unknown wizard action' >&2; exit 2 ;;
+  esac
+  result=$?
+  echo
+  if (( result == 0 )); then echo 'Done. Return to the setup window.'; else echo "Command failed ($result). Review the output above."; fi
+  read -r -p 'Press Enter to close this terminal... ' _
+  exit "$result"
+fi
+case ${1:-} in
+  setup|enroll) ;;
+  *) exit 2 ;;
+esac
+for terminal in kitty foot alacritty ghostty; do
+  if command -v "$terminal" >/dev/null 2>&1; then
+    case $terminal in
+      kitty|foot|alacritty) exec "$terminal" -e "$0" run "$@" ;;
+      ghostty) exec "$terminal" -e "$0" run "$@" ;;
+    esac
+  fi
+done
+echo 'No supported terminal found (kitty, foot, alacritty, ghostty).' >&2
+exit 1

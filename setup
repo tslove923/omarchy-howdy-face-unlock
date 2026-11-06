@@ -6,6 +6,23 @@
 set -e
 
 root=$(cd "$(dirname "$0")" && pwd)
+no_enroll=false
+selected_camera=""
+cli_mode=false
+while (( $# )); do
+  case "$1" in
+    --no-enroll) no_enroll=true; shift ;;
+    --camera) [[ $# -ge 2 ]] || { echo "--camera needs a device" >&2; exit 2; }; selected_camera=$2; shift 2 ;;
+    --cli) cli_mode=true; shift ;;
+    *) echo "Unknown option: $1" >&2; exit 2 ;;
+  esac
+done
+# Setup menu and the documented first-run command open the wizard on a live
+# desktop. The wizard calls back with --no-enroll/--camera for the actual
+# privileged install. Keep --cli for headless and recovery use.
+if [[ $cli_mode == false && $no_enroll == false && -z $selected_camera && -n ${WAYLAND_DISPLAY:-} ]] && command -v omarchy-shell >/dev/null 2>&1; then
+  if timeout 5 omarchy-shell howdy open >/dev/null 2>&1; then exit 0; fi
+fi
 
 CONFIG_DIR="/etc/howdy"
 MODELS_DIR="$CONFIG_DIR/models"
@@ -51,10 +68,18 @@ echo -e "\e[32mSetting up face unlock (Howdy) for the lock screen.\n\e[0m"
 # Bail before installing anything if there's no IR camera to use. A color-only
 # webcam can technically run Howdy too, but it's far less reliable across
 # lighting and isn't what this flow is tuned for.
-ir_device=$("$root/bin/omarchy-hw-ir-camera") || {
-  echo -e "\e[31mNo infrared camera detected.\e[0m"
-  exit 1
-}
+if [[ -n $selected_camera ]]; then
+  # The wizard offers only enumerated video nodes; validate again at the
+  # privileged boundary, including the symlink target after re-enumeration.
+  [[ $selected_camera == /dev/video[0-9]* || $selected_camera == /dev/v4l/by-id/* ]] || { echo "Invalid camera path" >&2; exit 2; }
+  [[ -c $selected_camera && $(readlink -f "$selected_camera") == /dev/video[0-9]* ]] || { echo "Camera no longer exists" >&2; exit 2; }
+  ir_device=$selected_camera
+else
+  ir_device=$("$root/bin/omarchy-hw-ir-camera") || {
+    echo -e "\e[31mNo infrared camera detected.\e[0m"
+    exit 1
+  }
+fi
 echo "Found infrared camera at $ir_device."
 
 source omarchy-sudo-keepalive
@@ -138,7 +163,7 @@ if [[ ! -d /etc/linux-enable-ir-emitter ]] || [[ -z $(sudo find /etc/linux-enabl
 fi
 
 # Enroll a face model if this user doesn't have one yet.
-if [[ ! -f "$MODELS_DIR/$USER.dat" ]]; then
+if [[ $no_enroll == false && ! -f "$MODELS_DIR/$USER.dat" ]]; then
   echo -e "\nLet's add your face. Look at the camera and hold still.\n"
   sudo howdy add
 fi

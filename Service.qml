@@ -1,6 +1,7 @@
 import QtQuick
 import Quickshell
 import Quickshell.Io
+import "ui"
 
 // This plugin's only real shell-side job: notice if face unlock has gone
 // dead and tell the user, rather than let it fail silently until they hit
@@ -24,6 +25,8 @@ import Quickshell.Io
 // never raise an alarm.
 Item {
   id: root
+
+  Wizard { id: wizard }
 
   property var shell: null
 
@@ -136,6 +139,11 @@ Item {
 
   IpcHandler {
     target: "howdy"
+
+    function open(): string {
+      wizard.open()
+      return "opened"
+    }
 
     function status(): string {
       return root.healthy ? "ok" : "broken"

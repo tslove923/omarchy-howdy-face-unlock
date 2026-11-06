@@ -22,13 +22,26 @@ omarchy plugin add https://github.com/tslove923/omarchy-howdy-face-unlock
 ~/.config/omarchy/plugins/io.github.tslove923.howdy-face-unlock/setup
 ```
 
-`omarchy plugin add` only clones files — run `setup` yourself afterward. It
-detects your IR camera, installs `howdy-git` and `linux-enable-ir-emitter`
+`omarchy plugin add` only clones files — run `setup` yourself afterward. On an
+Omarchy desktop it opens a **Camera → Enroll → Verify** wizard. Reopen it with
+`omarchy-shell howdy open`. For terminal-only setup or recovery, run
+`setup --cli`.
+
+The wizard recommends a greyscale-only IR camera (with a manual override),
+shows its preview, and uses the existing installer in a terminal for package
+installation and interactive emitter calibration. It then guides `howdy add`
+and shows live **match / no match / no face** results using Howdy's detector,
+saved model, and configured threshold. The camera runs only while the wizard
+is open; preview frames live in per-user runtime storage and are removed when
+it closes. If the desktop user cannot read the camera or face model, the wizard
+shows an error and `sudo howdy test` remains available.
+
+The underlying installer detects your IR camera, installs `howdy-git` and `linux-enable-ir-emitter`
 from the AUR (building `python-dlib` CPU-only unless it detects an Nvidia
 GPU, to dodge that AUR package's broken CUDA subpackage; the CPU-only build
 clones the AUR PKGBUILD pinned to a fixed commit SHA so upstream can't move
-under the build), configures the emitter, enrolls your face, and wires up
-the lock screen.
+under the build), configures the emitter, enrolls your face in `--cli` mode,
+and wires up the lock screen.
 
 Setup and removal are also reachable from the Omarchy menu: **Setup → Security
 → Face Unlock** and **Remove → Security → Face Unlock** (both only appear
