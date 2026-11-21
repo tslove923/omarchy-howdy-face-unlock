@@ -24,6 +24,7 @@ PanelWindow {
   property string selectedCamera: ""
   property string errorText: ""
   property string activeAction: ""
+  property string sudoPolkitChoice: ""
   property bool restartRequired: false
   property int frameNumber: 0
   property color bg: "#17191f"
@@ -38,6 +39,7 @@ PanelWindow {
   function open() {
     visible = true
     step = 0
+    sudoPolkitChoice = ""
     refresh()
     if (!themeProc.running) themeProc.running = true
   }
@@ -47,7 +49,7 @@ PanelWindow {
   }
   function startPreview() {
     stopPreview()
-    if (!selectedCamera || !install.installed || commandProc.running) return
+    if (step === 3 || !selectedCamera || !install.installed || commandProc.running) return
     errorText = ""
     previewProc.command = [backend, "stream", selectedCamera, userName, step === 2 ? "verify" : "preview"]
     previewRestart.start()
@@ -62,7 +64,7 @@ PanelWindow {
     if (commandProc.running) return
     stopPreview()
     activeAction = action
-    commandProc.command = action === "setup" ? [actionPath, "setup", selectedCamera] : [actionPath, "enroll"]
+    commandProc.command = action === "setup" ? [actionPath, "setup", selectedCamera] : [actionPath, action]
     commandProc.running = true
   }
   function resultTitle() {
@@ -199,12 +201,13 @@ PanelWindow {
       if (exitCode === 0) {
         wizard.errorText = ""
         if (wizard.activeAction === "setup") wizard.restartRequired = true
-        if (wizard.visible) wizard.step = wizard.activeAction === "setup" ? 1 : 2
+        if (wizard.activeAction === "sudo-polkit") wizard.install.sudoPolkitEnabled = true
+        if (wizard.visible && wizard.activeAction !== "sudo-polkit") wizard.step = wizard.activeAction === "setup" ? 1 : 2
       } else {
         const details = String(commandErrors.text || "").trim()
         wizard.errorText = details.includes("Patch target not found")
           ? "Setup could not patch this Omarchy lock screen version. Face unlock is not active yet."
-          : (wizard.activeAction === "setup" ? "Setup" : "Enrollment") + " failed" + (details ? ": " + details.slice(-240) : ".")
+          : (wizard.activeAction === "setup" ? "Setup" : wizard.activeAction === "enroll" ? "Enrollment" : "Sudo and polkit setup") + " failed" + (details ? ": " + details.slice(-240) : ".")
       }
       if (wizard.visible) {
         wizard.refresh()
@@ -271,7 +274,7 @@ PanelWindow {
         Layout.bottomMargin: 22
         spacing: 10
         Repeater {
-          model: ["01  Camera", "02  Enroll", "03  Verify"]
+          model: ["01  Camera", "02  Enroll", "03  Verify", "04  Admin"]
           delegate: Rectangle {
             required property int index
             required property string modelData
@@ -298,7 +301,7 @@ PanelWindow {
           Layout.fillHeight: true
           spacing: 12
           Text {
-            text: wizard.step === 0 ? "Choose your camera" : wizard.step === 1 ? "Add your face" : "Test recognition"
+            text: wizard.step === 0 ? "Choose your camera" : wizard.step === 1 ? "Add your face" : wizard.step === 2 ? "Test recognition" : "Sudo and polkit?"
             color: wizard.fg; font.pixelSize: 20; font.weight: Font.DemiBold
           }
           Text {
@@ -307,7 +310,8 @@ PanelWindow {
             color: wizard.muted; font.pixelSize: 13
             text: wizard.step === 0 ? "The greyscale-only sensor is usually your IR camera. Configure it, then check its preview before enrolling." :
                   wizard.step === 1 ? "Look straight at the camera and hold still. Howdy stores a face encoding, not the preview image." :
-                                      "This uses Howdy’s detector, your saved model, and its configured match threshold."
+                  wizard.step === 2 ? "This uses Howdy’s detector, your saved model, and its configured match threshold." :
+                                      "Optional: use your face for local administrator prompts. Your password continues to work."
           }
           Repeater {
             model: wizard.step === 0 ? wizard.cameras : []
@@ -349,6 +353,36 @@ PanelWindow {
             text: wizard.resultHint() + (wizard.scan.distance !== null && wizard.scan.distance !== undefined ? "\nDistance " + wizard.scan.distance + " · threshold " + wizard.scan.threshold : "")
             color: wizard.muted; font.pixelSize: 12; wrapMode: Text.WordWrap
           }
+          Repeater {
+            model: wizard.step === 3 ? [{value: "yes", title: "Yes, enable face auth"}, {value: "no", title: "No, leave unchanged"}] : []
+            delegate: Rectangle {
+              required property var modelData
+              Layout.fillWidth: true
+              height: 56; radius: 9
+              color: wizard.sudoPolkitChoice === modelData.value ? Qt.alpha(wizard.accent, .13) : wizard.panel
+              border.color: wizard.sudoPolkitChoice === modelData.value ? wizard.accent : wizard.line
+              RowLayout {
+                anchors.fill: parent; anchors.margins: 14; spacing: 12
+                Rectangle {
+                  width: 19; height: 19; radius: 10
+                  color: "transparent"
+                  border.width: 2; border.color: wizard.sudoPolkitChoice === modelData.value ? wizard.accent : wizard.muted
+                  Rectangle {
+                    anchors.centerIn: parent; width: 9; height: 9; radius: 5
+                    color: wizard.accent; visible: wizard.sudoPolkitChoice === modelData.value
+                  }
+                }
+                Text { text: modelData.title; color: wizard.fg; font.pixelSize: 13; font.weight: Font.DemiBold }
+              }
+              MouseArea { anchors.fill: parent; onClicked: wizard.sudoPolkitChoice = modelData.value }
+            }
+          }
+          Text {
+            visible: wizard.step === 3
+            Layout.fillWidth: true; wrapMode: Text.WordWrap
+            text: wizard.install.sudoPolkitEnabled ? "Already enabled. Choosing No leaves the existing setting in place; run remove to undo it." : "Choose Yes to add Howdy to sudo and polkit. Choosing No makes no changes."
+            color: wizard.install.sudoPolkitEnabled ? wizard.good : wizard.muted; font.pixelSize: 12
+          }
           Item { Layout.fillHeight: true }
           Text {
             visible: wizard.errorText.length > 0
@@ -361,17 +395,17 @@ PanelWindow {
             visible: commandProc.running
             Layout.fillWidth: true
             wrapMode: Text.WordWrap
-            text: wizard.activeAction === "setup" ? "Configuring face unlock… Approve the desktop password prompt if asked." : "Adding your face… Look at the camera and hold still."
+            text: wizard.activeAction === "setup" ? "Configuring face unlock… Approve the desktop password prompt if asked." : wizard.activeAction === "enroll" ? "Adding your face… Look at the camera and hold still." : "Enabling face auth for sudo and polkit…"
             color: wizard.accent; font.pixelSize: 12
           }
           Rectangle {
             Layout.fillWidth: true; height: 39; radius: 8
             color: wizard.accent
-            opacity: wizard.selectedCamera && !commandProc.running ? 1 : .45
-            Text { anchors.centerIn: parent; text: commandProc.running ? "Working…" : wizard.step === 0 ? (wizard.install.installed && wizard.install.camera === wizard.selectedCamera ? "Continue" : "Configure this camera") : wizard.step === 1 ? (wizard.install.enrolled ? "Continue" : "Add my face") : "Done"; color: wizard.bg; font.pixelSize: 13; font.weight: Font.DemiBold }
+            opacity: (wizard.step === 3 ? wizard.sudoPolkitChoice.length > 0 : wizard.selectedCamera.length > 0) && !commandProc.running ? 1 : .45
+            Text { anchors.centerIn: parent; text: commandProc.running ? "Working…" : wizard.step === 0 ? (wizard.install.installed && wizard.install.camera === wizard.selectedCamera ? "Continue" : "Configure this camera") : wizard.step === 1 ? (wizard.install.enrolled ? "Continue" : "Add my face") : wizard.step === 2 ? "Continue" : wizard.sudoPolkitChoice === "yes" && !wizard.install.sudoPolkitEnabled ? "Enable face auth" : "Done"; color: wizard.bg; font.pixelSize: 13; font.weight: Font.DemiBold }
             MouseArea {
               anchors.fill: parent
-              enabled: wizard.selectedCamera.length > 0 && !commandProc.running
+              enabled: (wizard.step === 3 ? wizard.sudoPolkitChoice.length > 0 : wizard.selectedCamera.length > 0) && !commandProc.running
               onClicked: {
                 wizard.errorText = ""
                 if (wizard.step === 0) {
@@ -380,7 +414,9 @@ PanelWindow {
                 } else if (wizard.step === 1) {
                   if (wizard.install.enrolled) wizard.step = 2
                   else wizard.launch("enroll")
-                } else wizard.visible = false
+                } else if (wizard.step === 2) wizard.step = 3
+                else if (wizard.sudoPolkitChoice === "yes" && !wizard.install.sudoPolkitEnabled) wizard.launch("sudo-polkit")
+                else wizard.visible = false
               }
             }
           }
@@ -392,6 +428,7 @@ PanelWindow {
           }
         }
         Rectangle {
+          visible: wizard.step !== 3
           Layout.fillWidth: true
           Layout.minimumWidth: 300
           Layout.fillHeight: true
@@ -419,11 +456,26 @@ PanelWindow {
             Text { id: liveLabel; anchors.centerIn: parent; text: wizard.step === 2 ? wizard.resultTitle() : "LOCAL CAMERA PREVIEW"; color: wizard.fg; font.pixelSize: 11; font.weight: Font.DemiBold }
           }
         }
+        Rectangle {
+          visible: wizard.step === 3
+          Layout.fillWidth: true
+          Layout.minimumWidth: 300
+          Layout.fillHeight: true
+          radius: 12; color: wizard.panel; border.color: wizard.line
+          ColumnLayout {
+            anchors.fill: parent; anchors.margins: 26; spacing: 14
+            Item { Layout.fillHeight: true }
+            Text { text: "LOCAL ADMIN PROMPTS"; color: wizard.accent; font.pixelSize: 12; font.weight: Font.DemiBold }
+            Text { Layout.fillWidth: true; wrapMode: Text.WordWrap; text: "Type a password as usual, or press Enter on an empty prompt to try a face scan."; color: wizard.fg; font.pixelSize: 18; font.weight: Font.DemiBold }
+            Text { Layout.fillWidth: true; wrapMode: Text.WordWrap; text: "Howdy declines face scans over SSH or with the lid closed. This option does not affect the lock-screen setup you just completed."; color: wizard.muted; font.pixelSize: 13 }
+            Item { Layout.fillHeight: true }
+          }
+        }
       }
       Rectangle { Layout.fillWidth: true; height: 1; color: wizard.line }
       Text {
         Layout.topMargin: 12
-        text: "Camera runs only while this window is open · Preview frames are kept in temporary runtime storage"
+        text: wizard.step === 3 ? "Camera preview is stopped on this page · The choice takes effect only when you select Yes" : "Camera runs only while this window is open · Preview frames are kept in temporary runtime storage"
         color: wizard.muted; font.pixelSize: 11
       }
     }

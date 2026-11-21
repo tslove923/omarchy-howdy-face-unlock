@@ -76,8 +76,12 @@ fn status() -> Value {
     let user = env::var("USER").unwrap_or_default();
     let model = Path::new("/etc/howdy/models").join(format!("{user}.dat"));
     let run = runtime();
+    let marker = "# managed by Howdy Face Unlock (io.github.tslove923.howdy-face-unlock)";
+    let pam_wired = ["/etc/pam.d/sudo", "/etc/pam.d/polkit-1"].iter().all(|path|
+        fs::read_to_string(path).map(|s| s.lines().any(|line| line == marker)).unwrap_or(false));
     json!({"installed":Path::new(CONFIG).exists(),
            "camera":ini("video","device_path",""),"enrolled":model.exists(),
+           "sudoPolkitEnabled":pam_wired,
            "modelReadable":fs::File::open(&model).is_ok(),
            "preview":run.join("preview.jpg"),"state":run.join("state.json")})
 }

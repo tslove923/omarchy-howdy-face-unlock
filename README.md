@@ -23,7 +23,7 @@ omarchy plugin add https://github.com/tslove923/omarchy-howdy-face-unlock
 ```
 
 `omarchy plugin add` only clones files — run `setup` yourself afterward. On an
-Omarchy desktop it opens a **Camera → Enroll → Verify** wizard. Reopen it with
+Omarchy desktop it opens a **Camera → Enroll → Verify → Sudo & polkit** wizard. Reopen it with
 `omarchy-shell howdy open`. For terminal-only setup or recovery, run
 `setup --cli`.
 
@@ -31,7 +31,10 @@ The wizard recommends a greyscale-only IR camera (with a manual override),
 shows its preview, and runs installation and enrollment in the window with a
 desktop password prompt when authorization is needed. It then guides `howdy add`
 and shows live **match / no match / no face** results using Howdy's detector,
-saved model, and configured threshold. The preview and verification backend is
+saved model, and configured threshold. The final page explicitly asks whether
+to offer face authentication for local sudo and polkit prompts; neither Yes
+nor No is selected by default. Choosing No leaves those PAM services unchanged.
+The preview and verification backend is
 Rust (V4L2 and dlib). It filters unusable camera frames and keeps the last
 usable preview visible instead of flashing blank. Howdy itself and the
 lock-screen patcher still use Python. The camera runs only while the wizard is
@@ -145,8 +148,9 @@ stock `lock/Service.qml` is.
   same way it already trusts nothing it can't verify for fingerprint/PAM.
   Session code able to rewrite any of those could otherwise enroll a face
   everyone matches or swap in an auth module that always succeeds.
-- Optional (asked during setup, default yes): face auth for **sudo and
-  polkit**. `pam_unix` stays first with `try_first_pass`, so a typed password
+- Optional face auth for **sudo and polkit**. The desktop wizard asks on its
+  final page with no preselected choice; `setup --cli` prompts with Yes as its
+  default. `pam_unix` stays first with `try_first_pass`, so a typed password
   authenticates exactly as before and only an *empty* Enter falls through to a
   face scan; howdy itself declines over SSH and when the lid is closed. Undone
   by `remove`. Note: this is inert where the user has blanket `NOPASSWD` in
@@ -160,17 +164,14 @@ stock `lock/Service.qml` is.
 
 ## Known rough edges
 
-- Omarchy does not ship face unlock yet. An earlier Howdy PR
-  ([#5212](https://github.com/basecamp/omarchy/pull/5212)) was closed as a
-  duplicate; the current open one is
-  [**omacom/omarchy#8336**](https://github.com/omacom/omarchy/pull/8336)
-  ("Add face authentication (howdy) to the lock screen"). It takes a similar
-  approach to the stock-lock half of this plugin -- the same
-  `omarchy-lock-face` PAM service -- but patches Omarchy core rather than
-  shipping as a plugin. This project is tracking #8336: if it merges, the
-  stock-lock patch here becomes redundant, but the Lock Screen Explorer shim
-  would still be needed, since #8336 only covers the stock lock screen. Until
-  then, this plugin is how you get face unlock today.
+- Omarchy does not ship face unlock yet. Several competing upstream proposals
+  are open, including [a Howdy lock-screen path](https://github.com/omacom/omarchy/pull/8336),
+  [a Facelock path](https://github.com/omacom/omarchy/pull/11612), and
+  [a backend-neutral setup contract](https://github.com/omacom/omarchy/pull/7040).
+  Maintainers have not selected a canonical backend or decided whether sudo
+  and polkit belong in the default scope. If a stock-lock implementation
+  lands, this plugin's stock-lock patch may become redundant; replacement
+  lock-screen plugins would still need their own integration.
 
 ## Lock-screen replacement plugins (Lock Screen Explorer)
 

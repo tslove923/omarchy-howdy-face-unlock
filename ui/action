@@ -18,5 +18,10 @@ case ${1:-} in
     authorize
     sudo -n howdy -U "$USER" -y add
     ;;
+  sudo-polkit)
+    [[ $# == 1 ]] || exit 2
+    authorize
+    bash "$root/bin/howdy-sudo-adapter" install
+    ;;
   *) echo 'Unknown wizard action' >&2; exit 2 ;;
 esac
