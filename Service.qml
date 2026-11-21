@@ -1,6 +1,7 @@
 import QtQuick
 import Quickshell
 import Quickshell.Io
+import "ui"
 
 // This plugin's only real shell-side job: notice if face unlock has gone
 // dead and tell the user, rather than let it fail silently until they hit
@@ -24,6 +25,8 @@ import Quickshell.Io
 // never raise an alarm.
 Item {
   id: root
+
+  Wizard { id: wizard }
 
   property var shell: null
 
@@ -62,6 +65,7 @@ Item {
   Process {
     id: healthCheckProc
     command: ["bash", "-c", [
+      "export OMARCHY_PATH=${OMARCHY_PATH:-/usr/share/omarchy}",
       "pam_howdy=" + root.pamFile,
       "qml=${OMARCHY_PATH:-/usr/share/omarchy}/shell/plugins/lock/Service.qml",
       "[[ -f $qml ]] || qml=" + root.lockQml,
@@ -73,11 +77,14 @@ Item {
       "if [[ -f $explorer_qml ]] && command -v omarchy >/dev/null 2>&1; then " +
         "if omarchy plugin list --json 2>/dev/null | grep -q '\"id\": *\"io.github.sirjul1337.lock-explorer\"[^}]*\"enabled\": *true'; then explorer_enabled=yes; fi; " +
       "fi",
-      // Explorer live: health is the facelock-shaped surface backed by Howdy.
+      // Explorer may call Howdy directly (older patched installations) or
+      // through the facelock-shaped compatibility surface.
       "if [[ $explorer_enabled == yes ]]; then " +
-        "if [[ -f " + root.pamFace + " ]] && grep -q 'pam_facelock.so' " + root.pamFace + " && " +
-           "[[ -e /usr/lib/security/pam_facelock.so ]] && " +
-           "compgen -G '/var/lib/facelock/models/*.onnx' >/dev/null 2>&1; then echo ok; else echo broken; fi; " +
+        "if [[ -f $pam_howdy ]] && grep -q 'config: \"omarchy-lock-howdy\"' \"$explorer_qml\"; then echo ok; " +
+        "elif [[ -f " + root.pamFace + " ]] && grep -q 'pam_facelock.so' " + root.pamFace + " && " +
+             "[[ -L /usr/lib/security/pam_facelock.so ]] && " +
+             "compgen -G '/var/lib/facelock/models/*.onnx' >/dev/null 2>&1; then echo ok; " +
+        "else echo broken; fi; " +
         "exit 0; " +
       "fi",
       // Stock lock live: health is the howdy patch present in the QML.
@@ -136,6 +143,11 @@ Item {
 
   IpcHandler {
     target: "howdy"
+
+    function open(): string {
+      wizard.open()
+      return "opened"
+    }
 
     function status(): string {
       return root.healthy ? "ok" : "broken"

@@ -22,13 +22,33 @@ omarchy plugin add https://github.com/tslove923/omarchy-howdy-face-unlock
 ~/.config/omarchy/plugins/io.github.tslove923.howdy-face-unlock/setup
 ```
 
-`omarchy plugin add` only clones files — run `setup` yourself afterward. It
-detects your IR camera, installs `howdy-git` and `linux-enable-ir-emitter`
+`omarchy plugin add` only clones files — run `setup` yourself afterward. On an
+Omarchy desktop it opens a **Camera → Enroll → Verify** wizard. Reopen it with
+`omarchy-shell howdy open`. For terminal-only setup or recovery, run
+`setup --cli`.
+
+The wizard recommends a greyscale-only IR camera (with a manual override),
+shows its preview, and runs installation and enrollment in the window with a
+desktop password prompt when authorization is needed. It then guides `howdy add`
+and shows live **match / no match / no face** results using Howdy's detector,
+saved model, and configured threshold. The preview and verification backend is
+Rust (V4L2 and dlib). Like Spectre Webcam, it drops raw IR frames whose mean
+brightness is below 10; it also rejects the HP camera's nearly uniform gray
+frames. The last usable image stays visible instead of flashing blank. Howdy
+itself and the lock-screen patcher still use Python. The camera runs only while the wizard
+is open; preview frames live in per-user runtime storage and are removed when
+it closes. If the desktop user cannot read the camera or face model, the wizard
+shows an error and `sudo howdy test` remains available. The plugin does not
+install or manage `linux-enable-ir-emitter`; cameras that need separate IR
+illumination support will remain dark until that support is configured outside
+this plugin.
+
+The underlying installer detects your IR camera and installs `howdy-git`
 from the AUR (building `python-dlib` CPU-only unless it detects an Nvidia
 GPU, to dodge that AUR package's broken CUDA subpackage; the CPU-only build
 clones the AUR PKGBUILD pinned to a fixed commit SHA so upstream can't move
-under the build), configures the emitter, enrolls your face, and wires up
-the lock screen.
+under the build), installs Rust and dlib for the wizard backend, enrolls your face in `--cli` mode,
+and wires up the lock screen.
 
 Setup and removal are also reachable from the Omarchy menu: **Setup → Security
 → Face Unlock** and **Remove → Security → Face Unlock** (both only appear
@@ -41,6 +61,12 @@ once an IR camera is detected / Howdy is installed, respectively).
 omarchy plugin remove io.github.tslove923.howdy-face-unlock
 ```
 
+`remove` reverses only the plugin-owned PAM, lock-screen, hook, and optional
+adapter changes. It retains Howdy packages, configuration, and enrolled face
+models because other applications may use them. If Omarchy has changed the
+lock-screen QML beyond a recognizable patch, removal stops rather than
+overwriting newer upstream code.
+
 ## Why this is a plugin and not just a script
 
 It isn't, entirely. Omarchy's lock screen (`omarchy.lock`) is a single
@@ -51,21 +77,11 @@ other. So `setup` still has to hand-patch
 would if this were a loose script. That file is package-owned, so an
 `omarchy update` can silently revert the patch.
 
-What the plugin *does* buy: `setup` installs a `post-update` hook
-(`omarchy hook install post-update ...`) that runs during `omarchy update`,
-right after system packages and migrations — i.e. right after the patch may
-have just been overwritten. It re-patches the file there, silently, while
-`omarchy update`'s own sudo session is still authenticated, so face unlock
-survives an update on its own; you don't need to notice anything or rerun
-`setup` yourself in the common case.
-
-That repair can only fail if sudo isn't authenticated non-interactively at
-that point (e.g. an unusual update flow). For that case, this repo's
-`Service.qml` also runs as a real first-class Omarchy service and checks on
-every shell start whether the patch survived. If it's still missing, you get
-a critical desktop notification telling you to rerun `setup`, instead of face
-unlock just silently going dead until you notice at the worst possible moment
-(i.e., at the lock screen).
+The plugin installs a `post-update` hook that **detects** when an Omarchy
+update replaces the package-owned lock-screen patch. It does not repair it
+unattended: the hook is user-writable and an update may leave a sudo session
+warm. Run `setup --cli` explicitly to restore the patch. The plugin service
+also checks health on shell start and notifies you if the patch is missing.
 
 On a dev checkout (`OMARCHY_PATH` pointing at a source tree), the running
 shell loads the lock plugin from `$OMARCHY_PATH/shell/plugins/lock/Service.qml`
@@ -75,26 +91,13 @@ that path too. A `git pull` that reverts it is the dev equivalent of an
 
 Query its health directly: `omarchy-shell howdy status` → `ok` or `broken`.
 
-### How the patch step stays safe to run as root
+### Privileged setup boundary
 
-Both `setup` and the post-update hook patch `lock/Service.qml` by staging a
-copy into a root-owned scratch dir (`sudo mktemp -d`, mode `700`) and running
-`patch-lock-howdy.py` from there instead of straight out of this checkout.
-Staging alone isn't enough, though: by the time that patch step runs, `sudo`
-is already authenticated from earlier in the same script (or, for the hook,
-from `omarchy update`'s own pacman prompt) — so anything running as the
-invoking user could still swap `patch-lock-howdy.py` in this user-writable
-checkout right up until root's `cp` reads it, and root would stage and
-execute those swapped bytes instead. Moving the read into a root-owned
-directory shrinks that window; it doesn't close it.
-
-What closes it: both call sites pin `patch-lock-howdy.py`'s sha256 as a
-constant and have root verify the staged copy against it before ever
-executing it, refusing on mismatch. That checks *what* is about to run
-rather than *where* it was staged from, so a swapped file is caught
-regardless of timing. Bump the pinned hash in both `setup` and
-`hooks/post-update.d/repair-howdy-lock.hook` if you ever modify
-`patch-lock-howdy.py`.
+The explicit setup flow stages `patch-lock-howdy.py` in a root-owned temporary
+directory and verifies its pinned SHA-256 before running it. The post-update
+hook never calls sudo or executes checkout code as root; repair requires an
+explicit setup rerun. Optional adapter scripts run as the user and invoke
+specific sudo utilities, not `sudo bash` on a user-writable script.
 
 Lock Screen Explorer support (see below) does not patch any file, so the
 hash pin above applies only to `patch-lock-howdy.py`. It writes its own
@@ -106,7 +109,7 @@ stock `lock/Service.qml` is.
 
 ## What setup actually changes
 
-- Installs `howdy-git`, `linux-enable-ir-emitter`, `v4l-utils`, `python-dlib`
+- Installs `howdy-git`, `v4l-utils`, `python-dlib`, `rust`, and `dlib`
 - `/etc/howdy/config.ini` — tuned for IR (`dark_threshold`, `certainty`,
   `max_height`), pointed at the camera by its **stable `/dev/v4l/by-id/`
   path** rather than a bare `/dev/videoN` (the kernel renumbers those across
@@ -158,10 +161,6 @@ stock `lock/Service.qml` is.
 
 ## Known rough edges
 
-- `linux-enable-ir-emitter configure` doesn't manage to save anything on
-  every camera — some just work under plain capture, and the tool's own
-  "already working" pre-check exits non-zero for that. `setup` treats this as
-  informational, not fatal.
 - Omarchy does not ship face unlock yet. An earlier Howdy PR
   ([#5212](https://github.com/basecamp/omarchy/pull/5212)) was closed as a
   duplicate; the current open one is
@@ -234,8 +233,8 @@ whichever lock screen is actually live (the adapter surface when Explorer
 is enabled, the stock patch otherwise). A broken verdict is only trusted
 after it repeats across several spaced checks well after startup, so a
 transient misread — a still-starting shell, a plugin mid-reload — cannot
-raise a false alarm. The post-update hook refreshes the adapter after
-`omarchy update` if it was previously set up.
+raise a false alarm. After an update, rerun `setup --cli` if the hook or
+health check reports a missing stock patch; rerun it to refresh an adapter.
 
 **Backup note:** never keep a copy of a plugin directory *inside*
 `~/.config/omarchy/plugins/` (e.g. a `foo.bak-.../` sibling). The shell

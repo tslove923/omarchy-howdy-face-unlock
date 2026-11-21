@@ -1,0 +1,17 @@
+[package]
+name = "omarchy-howdy-wizard"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+anyhow = "1"
+dlib-face-recognition = { version = "0.3.2", default-features = false }
+image = { version = "0.24", default-features = false, features = ["jpeg"] }
+libc = "0.2"
+serde_json = "1"
+signal-hook = "0.3"
+toml = "0.8"
+v4l = "0.14"
+
+[patch.crates-io]
+dlib-face-recognition = { path = "vendor/dlib-face-recognition" }

@@ -64,24 +64,51 @@ PATCHES = [
         '  }\n'
     ),
     (
-        '    authenticatingPassword = false\n'
-        '    fingerprintAuthenticating = false\n'
-        '    fingerprintRetryTimer.stop()\n'
-        '    if (passwordPam.active) passwordPam.abort()\n'
-        '    if (fingerprintPam.active) fingerprintPam.abort()\n'
-        '  }\n',
-        '    authenticatingPassword = false\n'
-        '    fingerprintAuthenticating = false\n'
-        '    howdyAuthenticating = false\n'
-        '    howdyAttempts = 0\n'
-        '    howdyFaceLockedOut = false\n'
-        '    howdyRetryPaused = false\n'
-        '    fingerprintRetryTimer.stop()\n'
-        '    howdyRetryTimer.stop()\n'
-        '    if (passwordPam.active) passwordPam.abort()\n'
-        '    if (fingerprintPam.active) fingerprintPam.abort()\n'
-        '    if (howdyPam.active) howdyPam.abort()\n'
-        '  }\n'
+        Match_ANY((
+            '    authenticatingPassword = false\n'
+            '    fingerprintAuthenticating = false\n'
+            '    fingerprintRetryTimer.stop()\n'
+            '    if (passwordPam.active) passwordPam.abort()\n'
+            '    if (fingerprintPam.active) fingerprintPam.abort()\n'
+            '  }\n',
+            '    authenticatingPassword = false\n'
+            '    fingerprintAuthenticating = false\n'
+            '    fingerprintUnreachedStreak = 0\n'
+            '    fingerprintAttemptFastError = false\n'
+            '    fingerprintAttemptPromptedAtMs = 0\n'
+            '    fingerprintLastNudgeMs = 0\n'
+            '    fingerprintLastSettleMs = 0\n'
+            '    fingerprintResumedAtMs = 0\n'
+            '    fingerprintProbeStreak = 0\n'
+            '    fingerprintPaused = false\n'
+            '    fingerprintSleptWhilePaused = false\n'
+            '    fingerprintRecheckTimer.stop()\n'
+            '    fingerprintRetryTimer.stop()\n'
+            '    fingerprintReachTimer.stop()\n'
+            '    fingerprintResumeTimer.stop()\n'
+            '    if (passwordPam.active) passwordPam.abort()\n'
+            '    if (fingerprintPam.active) fingerprintPam.abort()\n'
+            '  }\n',
+        )),
+        lambda old: old.replace(
+            '    fingerprintAuthenticating = false\n',
+            '    fingerprintAuthenticating = false\n'
+            '    howdyAuthenticating = false\n'
+            '    howdyAttempts = 0\n'
+            '    howdyFaceLockedOut = false\n'
+            '    howdyRetryPaused = false\n',
+            1,
+        ).replace(
+            '    if (passwordPam.active) passwordPam.abort()\n',
+            '    howdyRetryTimer.stop()\n'
+            '    if (passwordPam.active) passwordPam.abort()\n',
+            1,
+        ).replace(
+            '    if (fingerprintPam.active) fingerprintPam.abort()\n',
+            '    if (fingerprintPam.active) fingerprintPam.abort()\n'
+            '    if (howdyPam.active) howdyPam.abort()\n',
+            1,
+        ),
     ),
     (
         '    Qt.callLater(function() {\n'
@@ -95,11 +122,8 @@ PATCHES = [
         '    })\n'
     ),
     (
-        # runWake() has two upstream shapes: an older two-line body, and a
-        # newer one that clears the display-blank state first. Match_ANY is a
-        # sentinel: its value is a tuple of acceptable anchors, and the first
-        # one present in the file is the one replaced. Everything after the
-        # anchor is the same for both, so the `new` text is written once.
+        # Preserve the upstream wake behavior, which includes fingerprint
+        # resume/nudge on newer Omarchy versions.
         Match_ANY((
             '  function runWake() {\n'
             '    root.displaysBlank = false\n'
@@ -111,13 +135,14 @@ PATCHES = [
             '    if (!wakeProcess.running) wakeProcess.running = true\n'
             '    if (lockRequested) armBlankTimer()\n'
             '  }\n',
+            '  function runWake() {\n'
+            '    if (!wakeProcess.running) wakeProcess.running = true\n'
+            '    if (lockRequested) armBlankTimer()\n'
+            '    resumeFingerprint()\n'
+            '    nudgeFingerprint()\n'
+            '  }\n',
         )),
-        '  function runWake() {\n'
-        '    root.displaysBlank = false\n'
-        '    root.monitorDpmsKnown = false\n'
-        '    if (!wakeProcess.running) wakeProcess.running = true\n'
-        '    if (lockRequested) armBlankTimer()\n'
-        '\n'
+        lambda old: old[:-4] + '\n'
         '    // Real wake activity (mouse/keyboard/click on the lock view, a\n'
         '    // password attempt, etc.) is evidence someone is actually back at\n'
         '    // the machine. Refresh the presence window on every such signal so\n'
@@ -140,27 +165,29 @@ PATCHES = [
         '  }\n'
     ),
     (
-        '  function handleFingerprintFinished(result) {\n'
-        '    fingerprintAuthenticating = false\n'
-        '\n'
-        '    if (!lockRequested) return\n'
-        '    if (result === PamResult.Success) {\n'
-        '      finishUnlock()\n'
-        '    } else if (fingerprintConfigured) {\n'
-        '      fingerprintRetryTimer.restart()\n'
-        '    }\n'
-        '  }\n',
-        '  function handleFingerprintFinished(result) {\n'
-        '    fingerprintAuthenticating = false\n'
-        '\n'
-        '    if (!lockRequested) return\n'
-        '    if (result === PamResult.Success) {\n'
-        '      finishUnlock()\n'
-        '    } else if (fingerprintConfigured) {\n'
-        '      fingerprintRetryTimer.restart()\n'
-        '    }\n'
-        '  }\n'
-        '\n'
+        Match_ANY((
+            '  function handleFingerprintFinished(result) {\n'
+            '    fingerprintAuthenticating = false\n'
+            '\n'
+            '    if (!lockRequested) return\n'
+            '    if (result === PamResult.Success) {\n'
+            '      finishUnlock()\n'
+            '    } else if (fingerprintConfigured) {\n'
+            '      fingerprintRetryTimer.restart()\n'
+            '    }\n'
+            '  }\n',
+            '  function handleFingerprintFinished(result) {\n'
+            '    if (result === PamResult.Success && lockRequested) {\n'
+            '      // A match after a run of misses is the recovery too; the unlock resets\n'
+            '      // the streak without settling, so log it here or it leaves no trace.\n'
+            '      if (fingerprintUnreachedStreak > 0) logEvent("fingerprint-recovered: streak=" + fingerprintUnreachedStreak)\n'
+            '      finishUnlock()\n'
+            '    } else {\n'
+            '      settleFingerprintAttempt(result === PamResult.Error)\n'
+            '    }\n'
+            '  }\n',
+        )),
+        lambda old: old + '\n'
         '  function startHowdy() {\n'
         '    if (!lockRequested || !sessionLock.secure || !howdyConfigured) return\n'
         '    if (howdyPam.active || howdyAuthenticating) return\n'
@@ -232,24 +259,18 @@ PATCHES = [
         '    }\n'
     ),
     (
-        '    onError: function(error) {\n'
-        '      root.fingerprintAuthenticating = false\n'
-        '      if (root.lockRequested && root.fingerprintConfigured) fingerprintRetryTimer.restart()\n'
-        '    }\n'
-        '  }\n'
-        '\n'
-        '  Timer {\n'
-        '    id: fingerprintRetryTimer\n'
-        '    interval: 250\n'
-        '    repeat: false\n'
-        '    onTriggered: root.startFingerprint()\n'
-        '  }\n',
-        '    onError: function(error) {\n'
-        '      root.fingerprintAuthenticating = false\n'
-        '      if (root.lockRequested && root.fingerprintConfigured) fingerprintRetryTimer.restart()\n'
-        '    }\n'
-        '  }\n'
-        '\n'
+        Match_ANY((
+            '    onError: function(error) {\n'
+            '      root.fingerprintAuthenticating = false\n'
+            '      if (root.lockRequested && root.fingerprintConfigured) fingerprintRetryTimer.restart()\n'
+            '    }\n'
+            '  }\n',
+            '    onError: function(error) {\n'
+            '      root.settleFingerprintAttempt(true)\n'
+            '    }\n'
+            '  }\n',
+        )),
+        lambda old: old + '\n'
         '  PamContext {\n'
         '    id: howdyPam\n'
         '    config: "omarchy-lock-howdy"\n'
@@ -264,14 +285,23 @@ PATCHES = [
         '      if (root.lockRequested && root.howdyConfigured && !root.howdyFaceLockedOut) root.scheduleHowdyRetry()\n'
         '    }\n'
         '  }\n'
-        '\n'
-        '  Timer {\n'
-        '    id: fingerprintRetryTimer\n'
-        '    interval: 250\n'
-        '    repeat: false\n'
-        '    onTriggered: root.startFingerprint()\n'
-        '  }\n'
-        '\n'
+    ),
+    (
+        Match_ANY((
+            '  Timer {\n'
+            '    id: fingerprintRetryTimer\n'
+            '    interval: 250\n'
+            '    repeat: false\n'
+            '    onTriggered: root.startFingerprint()\n'
+            '  }\n',
+            '  Timer {\n'
+            '    id: fingerprintRetryTimer\n'
+            '    interval: FingerprintModel.MATCH_RETRY_MS\n'
+            '    repeat: false\n'
+            '    onTriggered: root.startFingerprint()\n'
+            '  }\n',
+        )),
+        lambda old: old + '\n'
         '  Timer {\n'
         '    id: howdyRetryTimer\n'
         '    interval: 250\n'
@@ -280,17 +310,19 @@ PATCHES = [
         '  }\n'
     ),
     (
-        '      root.fingerprintConfigured = String(fingerprintCheckStdout.text || "").trim() === "yes"\n'
-        '      if (root.lockRequested && root.fingerprintConfigured) root.startFingerprint()\n'
-        '      else if (!root.fingerprintConfigured && fingerprintPam.active) fingerprintPam.abort()\n'
-        '    }\n'
-        '  }\n',
-        '      root.fingerprintConfigured = String(fingerprintCheckStdout.text || "").trim() === "yes"\n'
-        '      if (root.lockRequested && root.fingerprintConfigured) root.startFingerprint()\n'
-        '      else if (!root.fingerprintConfigured && fingerprintPam.active) fingerprintPam.abort()\n'
-        '    }\n'
-        '  }\n'
-        '\n'
+        Match_ANY((
+            '      root.fingerprintConfigured = String(fingerprintCheckStdout.text || "").trim() === "yes"\n'
+            '      if (root.lockRequested && root.fingerprintConfigured) root.startFingerprint()\n'
+            '      else if (!root.fingerprintConfigured && fingerprintPam.active) fingerprintPam.abort()\n'
+            '    }\n'
+            '  }\n',
+            '    id: fingerprintCheckProc\n'
+            '    command: ["bash", "-c", "if [[ -f /etc/pam.d/omarchy-lock-fingerprint ]] && command -v fprintd-list >/dev/null 2>&1; then LC_ALL=C fprintd-list \\"$USER\\" 2>&1; else echo no; fi"]\n'
+            '    stdout: StdioCollector { id: fingerprintCheckStdout; waitForEnd: true }\n'
+            '    onExited: root.applyFingerprintProbe(fingerprintCheckStdout.text)\n'
+            '  }\n',
+        )),
+        lambda old: old + '\n'
         '  Process {\n'
         '    id: howdyCheckProc\n'
         '    // Only trust Howdy auth assets the session cannot rewrite: the PAM\n'
@@ -316,27 +348,34 @@ PATCHES = [
         '  }\n'
     ),
     (
-        '  Component.onCompleted: {\n'
-        '    refreshBackground()\n'
-        '    refreshFingerprintStatus()\n'
-        '    checkStrandedLock()\n'
-        '  }\n',
-        '  Component.onCompleted: {\n'
-        '    refreshBackground()\n'
-        '    refreshFingerprintStatus()\n'
-        '    refreshHowdyStatus()\n'
-        '    checkStrandedLock()\n'
-        '  }\n'
+        Match_ANY((
+            '  Component.onCompleted: {\n'
+            '    refreshBackground()\n'
+            '    refreshFingerprintStatus()\n'
+            '    checkStrandedLock()\n'
+            '  }\n',
+            '  Component.onCompleted: {\n'
+            '    knownScreenCount = realScreenCount()\n'
+            '    refreshBackground()\n'
+            '    refreshFingerprintStatus()\n'
+            '    checkStrandedLock()\n'
+            '  }\n',
+        )),
+        lambda old: old.replace('    refreshFingerprintStatus()\n',
+                                '    refreshFingerprintStatus()\n    refreshHowdyStatus()\n', 1),
     ),
     (
-        '        passwordPam: root.passwordPamConfigured,\n'
-        '        fingerprint: root.fingerprintConfigured,\n'
-        '        authenticating: root.authenticating,\n',
-        '        passwordPam: root.passwordPamConfigured,\n'
-        '        fingerprint: root.fingerprintConfigured,\n'
-        '        howdy: root.howdyConfigured,\n'
-        '        howdyPaused: root.howdyRetryPaused,\n'
-        '        authenticating: root.authenticating,\n'
+        Match_ANY((
+            '        fingerprint: root.fingerprintConfigured,\n'
+            '        authenticating: root.authenticating,\n',
+            '        fingerprint: root.fingerprintConfigured,\n'
+            '        fingerprintUnavailable: root.fingerprintUnavailable,\n'
+            '        authenticating: root.authenticating,\n',
+        )),
+        lambda old: old.replace('        authenticating: root.authenticating,\n',
+                                '        howdy: root.howdyConfigured,\n'
+                                '        howdyPaused: root.howdyRetryPaused,\n'
+                                '        authenticating: root.authenticating,\n', 1),
     ),
     (
         '    function preview(): string {\n'
@@ -390,7 +429,7 @@ def main():
             if count > 1:
                 print(f"Patch target not unique ({count}x):\n{old!r}", file=sys.stderr)
                 return 1
-        text = text.replace(old, new, 1)
+        text = text.replace(old, new(old) if callable(new) else new, 1)
 
     with open(path, "w") as f:
         f.write(text)

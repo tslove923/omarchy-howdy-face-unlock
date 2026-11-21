@@ -1,0 +1,22 @@
+#!/bin/bash
+# Run wizard actions without opening a terminal. Keep AUR builds as the user;
+# pkexec-ing the whole setup script would make makepkg refuse to run as root.
+set -euo pipefail
+root=$(cd "$(dirname "$0")/.." && pwd)
+export SUDO_ASKPASS="$root/ui/askpass"
+authorize() {
+  if ! sudo -n true 2>/dev/null; then sudo -A -v; fi
+}
+case ${1:-} in
+  setup)
+    [[ $# == 2 ]] || exit 2
+    authorize
+    "$root/setup" --wizard --no-enroll --camera "$2"
+    ;;
+  enroll)
+    [[ $# == 1 ]] || exit 2
+    authorize
+    sudo -n howdy -U "$USER" -y add
+    ;;
+  *) echo 'Unknown wizard action' >&2; exit 2 ;;
+esac

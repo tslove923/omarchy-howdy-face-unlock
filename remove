@@ -1,29 +1,62 @@
 #!/bin/bash
-
-# Undoes what ./setup did. Run it yourself: ~/.config/omarchy/plugins/<id>/remove
-
-set -e
-
+# Unwire this plugin's system changes before removing its checkout.
+set -euo pipefail
 root=$(cd "$(dirname "$0")" && pwd)
-
-PAM_HOWDY="/etc/pam.d/omarchy-lock-howdy"
-# Match setup's path resolution: patch/restore whichever copy the running
-# shell actually reads (dev checkout vs. packaged install).
+PAM_HOWDY=/etc/pam.d/omarchy-lock-howdy
 LOCK_QML="${OMARCHY_PATH:-/usr/share/omarchy}/shell/plugins/lock/Service.qml"
-[[ -f $LOCK_QML ]] || LOCK_QML="/usr/share/omarchy/shell/plugins/lock/Service.qml"
-LOCK_QML_ORIG="$LOCK_QML.orig"
-echo "Removing the facelock-shaped lock-screen surface..."
-sudo -n bash "$root/bin/howdy-lock-face-adapter" remove || true
+[[ -f $LOCK_QML ]] || LOCK_QML=/usr/share/omarchy/shell/plugins/lock/Service.qml
+HOOK="$HOME/.config/omarchy/hooks/post-update.d/repair-howdy-lock.hook"
 
-echo "Unwiring face unlock from sudo and polkit..."
-sudo -n bash "$root/bin/howdy-sudo-adapter" remove || true
+echo "Removing Howdy Face Unlock integration..."
+if ! sudo -n true 2>/dev/null; then
+  sudo -v
+fi
 
-echo "Removing Howdy packages..."
-omarchy-pkg-drop howdy-git linux-enable-ir-emitter python-dlib
+# Validate the reversal before changing any PAM integration. A stale backup
+# may predate an Omarchy update, so never restore it over current QML.
+scratch=""
+if [[ -f $LOCK_QML ]] && grep -q 'omarchy-lock-howdy' "$LOCK_QML"; then
+  scratch=$(mktemp)
+  cp "$LOCK_QML" "$scratch"
+  if ! python3 "$root/unpatch-lock-howdy.py" "$scratch"; then
+    rm -f "$scratch"
+    exit 1
+  fi
+fi
+trap '[[ -z $scratch ]] || rm -f "$scratch"; [[ -z ${expected:-} ]] || rm -f "$expected"' EXIT
 
-echo -e "\e[32m\nFace unlock has been completely removed.\e[0m"
-echo "(Your enrolled face model at /etc/howdy/models and /etc/howdy/config.ini"
-echo "were left in place in case you reinstall Howdy later.)"
-echo
-echo "You'll probably also want to remove the plugin itself:"
-echo "  omarchy plugin remove io.github.tslove923.howdy-face-unlock"
+# These scripts invoke only specific sudo utilities; never run a user-writable
+# checkout script as root with a potentially warm sudo timestamp.
+bash "$root/bin/howdy-lock-face-adapter" remove
+bash "$root/bin/howdy-sudo-adapter" remove
+
+if [[ -n $scratch ]]; then
+  sudo install -o root -g root -m 644 "$scratch" "$LOCK_QML"
+  echo "Removed Howdy from the stock lock screen without replacing newer Omarchy code."
+  omarchy-restart-shell
+fi
+
+if [[ -f $PAM_HOWDY ]]; then
+  expected=$(mktemp)
+  cat > "$expected" <<'PAM'
+#%PAM-1.0
+auth       required                    pam_howdy.so
+account    include                     system-local-login
+PAM
+  if sudo cmp -s "$expected" "$PAM_HOWDY"; then
+    sudo rm "$PAM_HOWDY"
+    echo "Removed $PAM_HOWDY"
+  else
+    echo "PAM service differs from this plugin's template; leaving $PAM_HOWDY untouched." >&2
+  fi
+fi
+
+if [[ -f $HOOK ]] && grep -qF 'PLUGIN_DIR="$HOME/.config/omarchy/plugins/io.github.tslove923.howdy-face-unlock"' "$HOOK"; then
+  rm "$HOOK"
+  echo "Removed the post-update hook."
+fi
+
+# Keep Howdy packages, config, and enrolled models: other consumers may use
+# them and deleting face data is an explicit, separate decision.
+echo "Plugin integration removed. Howdy packages, config, and enrolled models were retained."
+echo "To remove the plugin checkout: omarchy plugin remove io.github.tslove923.howdy-face-unlock"

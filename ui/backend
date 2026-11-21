@@ -1,0 +1,28 @@
+#!/bin/bash
+set -euo pipefail
+
+root=$(cd "$(dirname "$0")" && pwd)
+target_dir="${XDG_CACHE_HOME:-$HOME/.cache}/omarchy-howdy-wizard/target"
+binary="$target_dir/release/omarchy-howdy-wizard"
+needs_build() {
+  [[ ! -x $binary || $root/rust/src/main.rs -nt $binary ||
+     $root/rust/Cargo.toml -nt $binary || $root/rust/Cargo.lock -nt $binary ||
+     $root/rust/vendor/dlib-face-recognition/src/landmark_prediction/landmarks.rs -nt $binary ]]
+}
+if needs_build; then
+  if ! command -v cargo >/dev/null 2>&1; then
+    echo '{"error":"Rust backend is not built. Run plugin setup to install Rust and build it."}'
+    exit 1
+  fi
+  # Multiple QML status/camera/theme queries can start together on first open.
+  (
+    flock 9
+    if needs_build; then
+      cargo build --manifest-path "$root/rust/Cargo.toml" --target-dir "$target_dir" --release --locked --quiet >&2 || {
+        echo '{"error":"Rust camera backend could not build. Run setup --cli for details."}'
+        exit 1
+      }
+    fi
+  ) 9>"${XDG_RUNTIME_DIR:-/tmp}/omarchy-howdy-build.lock" || exit 1
+fi
+exec "$binary" "$@"

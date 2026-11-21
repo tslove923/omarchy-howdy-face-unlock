@@ -6,6 +6,33 @@
 set -e
 
 root=$(cd "$(dirname "$0")" && pwd)
+no_enroll=false
+selected_camera=""
+cli_mode=false
+wizard_mode=false
+while (( $# )); do
+  case "$1" in
+    --no-enroll) no_enroll=true; shift ;;
+    --camera) [[ $# -ge 2 ]] || { echo "--camera needs a device" >&2; exit 2; }; selected_camera=$2; shift 2 ;;
+    --cli) cli_mode=true; shift ;;
+    --wizard) wizard_mode=true; shift ;;
+    *) echo "Unknown option: $1" >&2; exit 2 ;;
+  esac
+done
+# Setup menu and the documented first-run command open the wizard on a live
+# desktop. The wizard calls back with --no-enroll/--camera for the actual
+# privileged install. Keep --cli for headless and recovery use.
+if [[ $cli_mode == false && $no_enroll == false && -z $selected_camera && -n ${WAYLAND_DISPLAY:-} ]] && command -v omarchy-shell >/dev/null 2>&1; then
+  # Build outside the plugin directory: Quickshell watches that tree and
+  # reloading it during a Cargo build closes the wizard mid-setup.
+  omarchy-pkg-add rust dlib v4l-utils
+  "$root/ui/backend" status >/dev/null
+  if timeout 5 omarchy-shell howdy open >/dev/null 2>&1; then exit 0; fi
+  timeout 5 omarchy-shell shell rescanPlugins >/dev/null 2>&1 || true
+  if timeout 5 omarchy-shell howdy open >/dev/null 2>&1; then exit 0; fi
+  echo "Could not open the Howdy wizard; restart the Omarchy shell and try again." >&2
+  exit 1
+fi
 
 CONFIG_DIR="/etc/howdy"
 MODELS_DIR="$CONFIG_DIR/models"
@@ -20,7 +47,7 @@ LOCK_QML_ORIG="$LOCK_QML.orig"
 # Expected sha256 of patch-lock-howdy.py at this commit. Root verifies the
 # staged copy against this fixed value before executing it (see the patch
 # step below) -- bump this alongside any change to that file.
-PATCHER_SHA256="6f161878ab91ca598e9578ad4a90782f82e384dfa841dfd1bf18227bb744eac8"
+PATCHER_SHA256="bff504407a9cc6527861a081d4bbc8f44549b1aa67547a1c2cfddaf0e8bcd136"
 
 # Sets/inserts key = value inside [section] of an ini file without disturbing
 # anything else in it -- howdy's config.ini is heavily commented, and a
@@ -51,16 +78,30 @@ echo -e "\e[32mSetting up face unlock (Howdy) for the lock screen.\n\e[0m"
 # Bail before installing anything if there's no IR camera to use. A color-only
 # webcam can technically run Howdy too, but it's far less reliable across
 # lighting and isn't what this flow is tuned for.
-ir_device=$("$root/bin/omarchy-hw-ir-camera") || {
-  echo -e "\e[31mNo infrared camera detected.\e[0m"
-  exit 1
-}
+if [[ -n $selected_camera ]]; then
+  # The wizard offers only enumerated video nodes; validate again at the
+  # privileged boundary, including the symlink target after re-enumeration.
+  [[ $selected_camera == /dev/video[0-9]* || $selected_camera == /dev/v4l/by-id/* ]] || { echo "Invalid camera path" >&2; exit 2; }
+  [[ -c $selected_camera && $(readlink -f "$selected_camera") == /dev/video[0-9]* ]] || { echo "Camera no longer exists" >&2; exit 2; }
+  ir_device=$selected_camera
+else
+  ir_device=$("$root/bin/omarchy-hw-ir-camera") || {
+    echo -e "\e[31mNo infrared camera detected.\e[0m"
+    exit 1
+  }
+fi
 echo "Found infrared camera at $ir_device."
 
-source omarchy-sudo-keepalive
+# `sudo -v` asks for a password even on Omarchy installations where the
+# required commands already work with passwordless sudo. Avoid an unnecessary
+# terminal prompt when the wizard (or remote setup) can proceed unattended.
+if ! sudo -n true 2>/dev/null; then
+  source omarchy-sudo-keepalive
+fi
 
 echo -e "\nInstalling required packages...\n"
-omarchy-pkg-add v4l-utils
+omarchy-pkg-add v4l-utils dlib rust
+"$root/ui/backend" status >/dev/null
 
 # python-dlib's AUR PKGBUILD defaults to building its CUDA subpackage, which
 # fails to build without an actual Nvidia GPU/toolkit present. Only attempt
@@ -89,7 +130,7 @@ if omarchy-pkg-missing python-dlib; then
   fi
 fi
 
-omarchy-pkg-aur-add howdy-git linux-enable-ir-emitter
+omarchy-pkg-aur-add howdy-git
 
 echo -e "\nConfiguring Howdy...\n"
 sudo mkdir -p "$MODELS_DIR"
@@ -110,35 +151,8 @@ set_ini "$CONFIG_FILE" video max_height 320
 # has to be able to read its own config directly as that user.
 sudo chmod 644 "$CONFIG_FILE"
 
-# Fire the emitter and find the control that drives it, if we haven't already.
-if [[ ! -d /etc/linux-enable-ir-emitter ]] || [[ -z $(sudo find /etc/linux-enable-ir-emitter -type f 2>/dev/null) ]]; then
-  echo -e "\nNow configuring the infrared emitter. Watch the camera closely and"
-  echo -e "answer y only for an actual flash/strobe -- not just a steady glow.\n"
-
-  # On some cameras this never manages to save a driver control at all -- its
-  # own "is it already flashing?" pre-check short-circuits with "already
-  # working" before it ever reaches the save step, and it exits non-zero for
-  # that. That isn't a setup failure: it means this camera doesn't need a
-  # saved control, not that anything is broken. A declined-every-candidate
-  # run also exits non-zero. Either way, don't let it abort the rest of
-  # setup -- the real test of whether the emitter fires is enrollment below
-  # and the lock screen itself, not this tool's exit code.
-  set +e
-  sudo linux-enable-ir-emitter --device "$ir_device" --verbose configure --no-gui --limit -1
-  emitter_status=$?
-  set -e
-
-  if (( emitter_status != 0 )); then
-    echo -e "\n(No new driver control saved. If the camera visibly lit up above,"
-    echo -e "that's fine -- this camera doesn't need one. If it stayed dark and"
-    echo -e "face enrollment below keeps failing, try better lighting and rerun"
-    echo -e "this setup script, or see"
-    echo -e "https://github.com/EmixamPP/linux-enable-ir-emitter for camera-specific help.)\n"
-  fi
-fi
-
 # Enroll a face model if this user doesn't have one yet.
-if [[ ! -f "$MODELS_DIR/$USER.dat" ]]; then
+if [[ $no_enroll == false && ! -f "$MODELS_DIR/$USER.dat" ]]; then
   echo -e "\nLet's add your face. Look at the camera and hold still.\n"
   sudo howdy add
 fi
@@ -184,7 +198,7 @@ if ! grep -q 'omarchy-lock-howdy' "$LOCK_QML"; then
   sudo python3 "$scratch_dir/patch-lock-howdy.py" "$scratch_dir/Service.qml"
   sudo install -o root -g root -m 644 "$scratch_dir/Service.qml" "$LOCK_QML"
   sudo rm -rf "$scratch_dir"
-  omarchy-restart-shell
+  if [[ $wizard_mode == false ]]; then omarchy-restart-shell; fi
 fi
 
 # Lock Screen Explorer (io.github.sirjul1337.lock-explorer) is a
@@ -213,7 +227,7 @@ fi
 # project's control, and its structure *will* eventually drift out from
 # under patch-lock-howdy-explorer.py's anchors (see that file's
 # docstring). When that happens, the rest of Howdy's install (packages,
-# camera, enrollment, the stock lock patch, the auto-repair hook) should
+# camera, enrollment, the stock lock patch, the drift-detection hook) should
 # still succeed -- Explorer compatibility is a bonus, not a precondition.
 # ---- Optional: Lock Screen Explorer compatibility -------------------------
 #
@@ -251,7 +265,7 @@ if [[ -f $HOME/.config/omarchy/plugins/io.github.sirjul1337.lock-explorer/manife
   echo "  /etc/pam.d/omarchy-lock-face, a pam_facelock.so -> pam_howdy.so symlink,"
   echo "  and /var/lib/facelock/models symlinks). Nothing in Explorer's own files"
   echo "is modified. A real facelock install is left alone."
-  read -r -p "Set up Lock Screen Explorer compatibility? [y/N] " reply || true
+  if [[ $wizard_mode == true ]]; then reply=n; else read -r -p "Set up Lock Screen Explorer compatibility? [y/N] " reply || true; fi
   case "${reply:-}" in [yY]|[yY][eE][sS]) adapter_wanted=yes ;; esac
 else
   # Not installed yet -- still offer it, so the surface is ready if Explorer is
@@ -260,13 +274,13 @@ else
   echo "Lock Screen Explorer is not installed. You can still pre-provision the"
   echo "facelock-shaped surface now so Howdy backs Explorer's face UI the moment"
   echo "you add it later. It only creates files outside Explorer's tree."
-  read -r -p "Pre-provision Lock Screen Explorer compatibility? [y/N] " reply || true
+  if [[ $wizard_mode == true ]]; then reply=n; else read -r -p "Pre-provision Lock Screen Explorer compatibility? [y/N] " reply || true; fi
   case "${reply:-}" in [yY]|[yY][eE][sS]) adapter_wanted=yes ;; esac
 fi
 
 if [[ $adapter_wanted == yes ]]; then
   echo "Providing the facelock-shaped lock-screen surface (for Lock Screen Explorer)..."
-  if sudo -n bash "$root/bin/howdy-lock-face-adapter" install; then
+  if bash "$root/bin/howdy-lock-face-adapter" install; then
     :
   else
     echo -e "\e[33mCouldn't install the Howdy lock-screen adapter -- continuing without\e[0m"
@@ -290,13 +304,13 @@ if [[ -d /etc/howdy ]]; then
   echo
   echo "Wire face unlock into sudo and polkit as well? A typed password still"
   echo "works; face is only tried when you press Enter on an empty prompt."
-  read -r -p "Wire face unlock into sudo and polkit? [Y/n] " reply || true
+  if [[ $wizard_mode == true ]]; then reply=n; else read -r -p "Wire face unlock into sudo and polkit? [Y/n] " reply || true; fi
   case "${reply:-}" in [nN]|[nN][oO]) sudo_wanted=no ;; *) sudo_wanted=yes ;; esac
 fi
 
 if [[ $sudo_wanted == yes ]]; then
   echo "Wiring face unlock into sudo and polkit..."
-  if sudo -n bash "$root/bin/howdy-sudo-adapter" install; then
+  if bash "$root/bin/howdy-sudo-adapter" install; then
     :
   else
     echo -e "\e[33mCouldn't wire face unlock into sudo/polkit -- continuing. The lock\e[0m"
@@ -325,16 +339,13 @@ print("yes" if any(p.get("id") == "io.github.sirjul1337.lock-explorer" and p.get
   fi
 fi
 
-# lock/Service.qml is package-owned, so `omarchy update` can silently revert
-# the patch above. Install a post-update hook that re-patches it automatically,
-# in the same `omarchy update` run, while pacman's sudo authorization is still
-# warm -- so face unlock survives an update without the user having to notice
-# a notification and rerun this script by hand. Idempotent: reinstalling just
-# overwrites the same file.
+# Omarchy updates may replace the package-owned lock file. The post-update
+# hook only detects drift; it never spends an update's warm sudo credential
+# on code from this user-writable plugin checkout. Rerun setup explicitly.
 if command -v omarchy >/dev/null 2>&1; then
   omarchy hook install post-update "$root/hooks/post-update.d/repair-howdy-lock.hook"
 else
-  echo -e "\e[33mCouldn't find 'omarchy' to install the auto-repair hook -- \e[0m"
+  echo -e "\e[33mCouldn't find 'omarchy' to install the drift-detection hook -- \e[0m"
   echo -e "\e[33myou'll need to rerun this script by hand after updates instead.\e[0m"
 fi
 
@@ -343,10 +354,8 @@ echo -e "(and fingerprint, if set up) whenever the lock screen engages.\e[0m"
 echo
 echo "Note: the lock screen change above patches a file the omarchy package"
 echo "owns (lock/Service.qml), so an 'omarchy update' can silently revert it."
-echo "A post-update hook now re-patches it automatically on every update; if"
-echo "that ever can't complete (e.g. sudo isn't authenticated at that point),"
-echo "this plugin's own Service.qml watchdog will notice and notify you to"
-echo "rerun this script by hand: $root/setup"
+echo "The post-update hook only reports a reverted lock patch; rerun"
+echo "setup --cli to restore it. It never uses an update's sudo session."
 echo
 echo "Lock Screen Explorer support is provided via a facelock-shaped surface"
 echo "(Howdy behind it), written outside Explorer's tree -- so an Explorer"
