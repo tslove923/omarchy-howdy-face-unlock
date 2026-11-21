@@ -10,7 +10,7 @@ use std::{env, fs, io::Write, os::unix::fs::PermissionsExt, path::{Path, PathBuf
 use v4l::{buffer::Type, io::mmap::Stream as MmapStream, io::traits::CaptureStream, video::Capture, Device};
 
 const CONFIG: &str = "/etc/howdy/config.ini";
-const LIT_FRAME_MIN_MEAN: f64 = 10.0; // Spectre webcam's raw IR-frame cutoff.
+const LIT_FRAME_MIN_MEAN: f64 = 10.0; // Reject frames too dark for a useful preview.
 const LIT_FRAME_MIN_CONTRAST: f64 = 5.0; // Also reject this camera's flat gray frames.
 
 fn runtime() -> PathBuf {

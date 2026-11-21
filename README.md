@@ -32,12 +32,11 @@ shows its preview, and runs installation and enrollment in the window with a
 desktop password prompt when authorization is needed. It then guides `howdy add`
 and shows live **match / no match / no face** results using Howdy's detector,
 saved model, and configured threshold. The preview and verification backend is
-Rust (V4L2 and dlib). Like Spectre Webcam, it drops raw IR frames whose mean
-brightness is below 10; it also rejects the HP camera's nearly uniform gray
-frames. The last usable image stays visible instead of flashing blank. Howdy
-itself and the lock-screen patcher still use Python. The camera runs only while the wizard
-is open; preview frames live in per-user runtime storage and are removed when
-it closes. If the desktop user cannot read the camera or face model, the wizard
+Rust (V4L2 and dlib). It filters unusable camera frames and keeps the last
+usable preview visible instead of flashing blank. Howdy itself and the
+lock-screen patcher still use Python. The camera runs only while the wizard is
+open; preview frames live in per-user runtime storage and are removed when it
+closes. If the desktop user cannot read the camera or face model, the wizard
 shows an error and `sudo howdy test` remains available. The plugin does not
 install or manage `linux-enable-ir-emitter`; cameras that need separate IR
 illumination support will remain dark until that support is configured outside
